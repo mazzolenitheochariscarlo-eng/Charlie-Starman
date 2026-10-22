@@ -1,0 +1,36 @@
+{
+  "_comment": "Brief for a modular desk screen system for temporary exhibitions. Lengths in mm, masses in kg.",
+  "name": "Exhibition desk screen",
+  "scenario": {
+    "desk_height": 740,
+    "mouth_height": 1200,
+    "ear_height": 1200,
+    "talker_distance": 1000,
+    "listener_distance": 1000,
+    "reference_run_length": 4200,
+    "background_noise": {"125": 55, "250": 52, "500": 49, "1000": 46, "2000": 42, "4000": 38, "8000": 34}
+  },
+  "constraints": {
+    "max_module_mass": 8.0,
+    "max_thickness": 120,
+    "min_height_above_desk": 350,
+    "max_height_above_desk": 650
+  },
+  "weights": {
+    "absorption": 0.30,
+    "speech_absorption": 0.15,
+    "privacy": 0.30,
+    "lightness": 0.10,
+    "cost": 0.075,
+    "carbon": 0.075
+  },
+  "module_widths": [600, 800, 1000, 1200, 1400, 1600],
+  "reference_module_width": 1200,
+  "reuse_cycles": 10,
+  "cost_reference_per_m2": 60,
+  "carbon_reference_per_m2": 15,
+  "layout": [
+    {"type": "bench", "name": "Work island", "desks_per_side": 3, "desk_width": 1400, "desk_depth": 800, "dividers": true, "count": 2},
+    {"type": "row", "name": "Info counter", "desks": 4, "desk_width": 1200, "desk_depth": 700, "dividers": true, "count": 1}
+  ]
+}

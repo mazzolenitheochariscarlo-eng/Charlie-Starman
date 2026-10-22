@@ -1,0 +1,24 @@
+island,run,requested_mm,modules_mm,shortfall_mm
+Work island #1,spine,4200,1400 + 1400 + 1400,0
+Work island #1,divider,800,800,0
+Work island #1,divider,800,800,0
+Work island #1,divider,800,800,0
+Work island #1,divider,800,800,0
+Work island #2,spine,4200,1400 + 1400 + 1400,0
+Work island #2,divider,800,800,0
+Work island #2,divider,800,800,0
+Work island #2,divider,800,800,0
+Work island #2,divider,800,800,0
+Info counter,front,4800,1600 + 1600 + 1600,0
+Info counter,divider,700,700,0
+Info counter,divider,700,700,0
+Info counter,divider,700,700,0
+
+module_width_mm,count,mass_each_kg
+700,3,2.15
+800,8,2.45
+1400,6,4.3
+1600,3,4.91
+
+joints,17
+supports,34

@@ -1,0 +1,14 @@
+{
+  "_comment": "Variant: PET felt on a PET core only, dry joints, so a whole module recycles as one material after its exhibition life.",
+  "name": "Mono-material PET exhibition desk screen",
+  "allowed_felts": ["pet_felt_light", "pet_felt_medium", "pet_felt_dense"],
+  "allowed_cores": ["pet_board_9mm", "pet_board_4mm"],
+  "allowed_joints": ["slot_key", "hinge_clip"],
+  "allowed_supports": ["desk_saddle", "weighted_foot"],
+  "module_widths": [600, 700, 800, 1000, 1200, 1400, 1600],
+  "reuse_cycles": 15,
+  "layout": [
+    {"type": "bench", "name": "Work island", "desks_per_side": 3, "desk_width": 1400, "desk_depth": 800, "dividers": true, "count": 2},
+    {"type": "row", "name": "Info counter", "desks": 4, "desk_width": 1200, "desk_depth": 700, "dividers": true, "count": 1}
+  ]
+}
