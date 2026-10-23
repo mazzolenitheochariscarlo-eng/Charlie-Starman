@@ -28,8 +28,14 @@ one-person module mass, flat-pack transport and reuse across many events.
   material budget. Inspect each one as a cross-section with its absorption curve.
 - **Materials**: 14 soft materials (plant, animal, fungus, recycled, mineral) and 5 hard
   ones, compared as plain flat layers, plus "try every material on this shape".
-- **Forms**: not panels but free objects, hanging or standing, grown by five rules from nature
-  (branching tree and coral, snow crystal, folding coral, spiral shell, foam cloud). Every
+- **Forms**: not panels but free objects, freestanding (default) or hanging, grown by five rules
+  from nature (branching tree and coral, snow crystal, folding coral, spiral shell, foam cloud) or
+  by four sheet hybrids that arrange flat felt sheets the way nature would (leaf canopy, mushroom
+  gills, pine cone, twisted lamellae). Freestanding pieces evolve a root flare and a holdfast
+  (splayed roots or a weighted plinth, in a rigid structure material) and must lean at least 10°
+  before toppling (centre of mass over the footprint). A material menu in the options bar fixes
+  the material, or lets evolution pick from the ticked ones; any form can be re-tested in another
+  material. Every
   candidate is voxelised and tested in a 2D finite-difference wave simulator (slices of a room
   at 250, 500 and 1000 Hz; felt modelled as a parallel air/porous path). Evolution keeps the
   forms that make sound die away fastest within a material budget per piece. Results show in
