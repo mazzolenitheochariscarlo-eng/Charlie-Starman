@@ -21,7 +21,7 @@ one-person module mass, flat-pack transport and reuse across many events.
 
 ## Biothing Sound Lab (web app)
 
-`webapp/` holds a browser app laid out like a creative-suite tool. One **Structures** workspace holds every generator (surface textures and free forms below), next to **Materials** and **Spaces**:
+`webapp/` holds a browser app laid out like a creative-suite tool, built around one **Studio** mode: choose or import the room (shown in 3D with its echo), grow structures for it, and place them in it. The target "This room's needs" weights each pitch by how much the selected room rings too long, so the structures answer the environment. Every generator produces a freestanding structure (surface textures grow on both faces of a freestanding screen). A **Materials** tab is the material library. The generators and room tools:
 
 - **Shapes**: six nature-inspired absorber families (spikes, gradient sponge, hanging cloud,
   bottle resonators, coiled channels, moss-on-a-shell) evolve under the same depth and
