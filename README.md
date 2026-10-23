@@ -41,6 +41,15 @@ one-person module mass, flat-pack transport and reuse across many events.
   forms that make sound die away fastest within a material budget per piece. Results show in
   3D, as a live wave animation, against a flat panel of the same material and mass, and export
   as OBJ. Checked against theory for a hanging felt layer, the simulator reads about 25% low.
+- **Sound-grown membrane** (in Forms, after Biothing's *Genware*): a sound becomes a structural
+  field that grows a freestanding cellular felt membrane. Three sources: the target sound (tone
+  bursts in the wave solver), an uploaded recording (its loudest moment drives the solver; its tempo
+  sets rhythmic banding of the cells) or a room's own resonances (standing-wave patterns of its
+  modes at 70-200 Hz). The field is the air motion in front of the piece, where porous felt works
+  hardest; cells grow smaller, thicker and closer there and open where the air is calm, and over
+  three rounds the field is lowered where the membrane already absorbs (form and sound shaping each
+  other). A seed library keeps genomes the designer likes and starts new growth from them, after
+  Lambros Malafouris's reading of Genware as a "library of seeds" changed by what grows from it.
 - **Spaces**: exhibition areas as 3D models (ready-made rooms, or your own `.obj` exports).
   Set the finishes and visitor count, place grown shapes, and compare reverberation time
   with the recommended value and the drop in crowd noise.

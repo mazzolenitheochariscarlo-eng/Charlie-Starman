@@ -29,7 +29,7 @@ for (const rule of Object.keys(G.RULES)) for (const mount of ["hanging", "standi
   const prims = G.grow(rule, genes, { mount, size: 1.2 });
   const { min, max } = G.bounds(prims), env = G.envelope(1.2, mount);
   assert.ok(prims.length >= 3 && prims.length < 6000, `${rule} primitive count ${prims.length}`);
-  const slack = G.RULES[rule].group === "hybrid" || mount === "standing" ? 0.081 : 1e-6; // sheets keep their real thickness when scaled
+  const slack = G.RULES[rule].group === "sound" ? 0.5 : G.RULES[rule].group === "hybrid" || mount === "standing" ? 0.081 : 1e-6; // membrane feet reach out sideways // sheets keep their real thickness when scaled
   assert.ok(max[0] - min[0] <= env.width + slack && max[2] - min[2] <= env.height + slack, `${rule} ${mount} fits`);
   if (mount === "hanging") close(max[2], 0, slack, `${rule} hangs from the ceiling`);
   else close(min[2], 0, slack, `${rule} stands on the floor`);
@@ -70,3 +70,27 @@ const vt = G.voxelize(tall, 0.05);
 assert.ok(G.stability(plinth(0.6), vt.com, vt.volume * 60, 680).ok, "wide plinth stands");
 assert.ok(!G.stability(plinth(0.08), vt.com, vt.volume * 60, 680).ok, "narrow base topples");
 console.log("freestanding checks ok");
+
+// Sound fields: tone bursts, a recorded signal and room modes all give a normalised field.
+const roomSec = { w: 6, h: 3.5, cx: 3.4 };
+const fa = G.fieldFromSound({ room: roomSec, x0: 3.4, width: 1.2, height: 1.8, src: [1.4, 1.5] });
+assert.ok(fa.data.length === 24 * 36 && Math.max(...fa.data) === 1 && Math.min(...fa.data) === 0, "tone-burst field normalised");
+const dtS = G.solverStep(), sig = Float32Array.from({ length: Math.round(0.05 / dtS) }, (_, i) => Math.sin(2 * Math.PI * 300 * i * dtS) * Math.exp(-i * dtS * 40));
+const fb = G.fieldFromSound({ room: roomSec, signal: sig, x0: 3.4, width: 1.2, height: 1.8, src: [1.4, 1.5] });
+assert.ok(Math.max(...fb.data) === 1, "signal-driven field");
+const fc = G.fieldFromModes({ L: 12, W: 8, H: 4.5, x0: 7, y0: 3, width: 1.2, height: 1.8 });
+assert.ok(fc.modes.length > 20 && fc.modes.every((m) => m.f >= 70 && m.f <= 200), `room modes in the voice range (${fc.modes.length})`);
+const m0 = fc.modes[0];
+close(m0.f, (343.2 / 2) * Math.hypot(m0.n[0] / 12, m0.n[1] / 8, m0.n[2] / 4.5), 1e-9, "mode frequency formula");
+const sd = (d) => { const mu = d.reduce((x, y) => x + y, 0) / d.length; return Math.sqrt(d.reduce((x, y) => x + (y - mu) ** 2, 0) / d.length); };
+assert.ok(sd(fc.data) > 0.15, "the resonance field has a pattern across the piece");
+// The membrane follows its field: more cells where the field is strong.
+const left = { data: Float32Array.from({ length: 24 * 36 }, (_, i) => ((i % 24) < 12 ? 1 : 0)), nx: 24, nz: 36 };
+const mem = G.grow("membrane", Array.from({ length: G.geneCount("membrane") }, () => 0.5), { mount: "standing", size: 1.2, field: left });
+const tiles = mem.filter((q) => G.isSheet(q) && !q.structure);
+const onLeft = tiles.filter((q) => q.c[0] < 0).length;
+assert.ok(onLeft > tiles.length * 0.6, `membrane is denser where sound is strong (${onLeft}/${tiles.length} cells on the loud side)`);
+assert.ok(mem.label && mem.field, "membrane reports its holdfast and final field");
+const st = G.evaluate({ rule: "membrane", genes: Array.from({ length: G.geneCount("membrane") }, () => 0.5), mount: "standing", size: 1.2, material: { sigma: 20000, density: 60 }, budget: 6, field: fa });
+assert.ok(st.stance && Number.isFinite(st.stance.angle) && st.stance.across > 0.2, `membrane stability (${st.stance.angle.toFixed(1)}°)`);
+console.log(`genware ok: ${tiles.length} cells, ${st.mass.toFixed(2)} kg, ${st.area.map((a) => a.toFixed(2)).join("/")} m2, tips at ${st.stance.angle.toFixed(0)}°`);

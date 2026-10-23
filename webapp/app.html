@@ -117,6 +117,13 @@ tr.current td { background: var(--panel-2); }
 .rule-thumb svg { width: 22px !important; height: 22px !important; }
 .art-card .pill svg { width: 14px; height: 14px; vertical-align: middle; }
 @media (max-width: 700px) { .wave-wrap { grid-template-columns: minmax(0, 1fr); } }
+.field-pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.field-canvas { width: 100%; max-width: 360px; height: auto; display: block; border: 1px solid var(--line); border-radius: 4px; background: #141517; }
+.mini-bands { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; height: 46px; align-items: end; }
+.mini-bands span { display: grid; grid-template-rows: 1fr auto; height: 100%; align-items: end; text-align: center; }
+.mini-bands i { display: block; background: var(--signal); border-radius: 2px 2px 0 0; }
+.mini-bands small { color: var(--muted); font-size: 10px; }
+@media (max-width: 700px) { .field-pair { grid-template-columns: minmax(0, 1fr); } }
 .viewport .hud { position: absolute; left: 10px; top: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
 .viewport .fallback { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; text-align: center; color: var(--muted); }
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
@@ -372,7 +379,8 @@ function renderTools() {
   if (state.ws === "shapes") items = [["all", "All shapes side by side"], "sep", ...families().map((f) => [f.key, `${f.name}: imitates ${f.imitates}`])];
   else if (state.ws === "materials") items = [["chart", "Compare chart"], ["table", "Material table"]];
   else if (state.ws === "forms") items = [["all", "All natural growth rules"], ...NATURAL.map((k) => [k, `${G.RULES[k].name}: imitates ${G.RULES[k].imitates}`]), "sep",
-    ["allsheets", "All sheet hybrids (felt sheets arranged by nature)"], ...HYBRID.map((k) => [k, `${G.RULES[k].name} (sheets): imitates ${G.RULES[k].imitates}`])];
+    ["allsheets", "All sheet hybrids (felt sheets arranged by nature)"], ...HYBRID.map((k) => [k, `${G.RULES[k].name} (sheets): imitates ${G.RULES[k].imitates}`]), "sep",
+    ["membrane", "Sound-grown membrane (after Biothing's Genware)"]];
   else items = [["orbit", "Orbit view (drag in the viewport)"], ["top", "Top view"], ["home", "Reset view"], "sep", ["eye", "Show or hide absorbers"]];
   $("#tools").innerHTML = items.map((it) => it === "sep" ? '<span class="tool-sep" aria-hidden="true"></span>' : (() => {
     const [k, label] = it;
@@ -640,7 +648,7 @@ function renderDock() {
   const d = $("#dock");
   if (state.ws === "shapes") d.innerHTML = propertiesPanel() + layersPanel();
   else if (state.ws === "materials") d.innerHTML = materialsPanel() + rigidPanel();
-  else if (state.ws === "forms") d.innerHTML = formsPropsPanel() + formsLayersPanel();
+  else if (state.ws === "forms") d.innerHTML = soundPanel() + formsPropsPanel() + formsLayersPanel();
   else d.innerHTML = spacesPanel() + spacePropsPanel() + absorbersPanel();
   bindDock();
 }
@@ -706,7 +714,7 @@ function bindDock() {
   if ($("#use-in-space")) $("#use-in-space").onclick = () => { const sp = curSpace(); if (sp) addPlacement(sp, state.tool); setWorkspace("spaces"); };
   if (state.ws === "shapes" && state.tool !== "all") setupDownloads(state.tool, current(state.tool));
   if (state.ws === "spaces") bindSpacesDock();
-  if (state.ws === "forms") bindFormsDock();
+  if (state.ws === "forms") { bindSoundPanel(); bindFormsDock(); }
 }
 const toggle = (set, k) => (set.has(k) ? set.delete(k) : set.add(k));
 function afterMaterials() { briefChanged(); renderDock(); renderCanvas(); renderStatus(); }
@@ -1225,7 +1233,7 @@ const ShapeView = (() => {
 // "Forms": free objects grown by natural rules (hanging or standing), tested in a wave simulator.
 const G = window.Growth;
 const RULE_KEYS = Object.keys(G.RULES);
-const NATURAL = RULE_KEYS.filter((k) => G.RULES[k].group !== "hybrid"), HYBRID = RULE_KEYS.filter((k) => G.RULES[k].group === "hybrid");
+const NATURAL = RULE_KEYS.filter((k) => !G.RULES[k].group), HYBRID = RULE_KEYS.filter((k) => G.RULES[k].group === "hybrid");
 const rulesFor = (pick) => (pick === "all" ? NATURAL : pick === "allsheets" ? HYBRID : [pick]);
 Object.assign(ICONS, {
   tree: '<path d="M10 18 V10 M10 10 L5 5 M10 10 L15 5 M5 5 L3 2 M5 5 L7 2 M15 5 L13 2 M15 5 L17 2"/>',
@@ -1320,16 +1328,24 @@ async function growForms() {
   const rules = rulesFor(state.fRule);
   const P = rules.length > 1 ? 10 : 14, GENS = rules.length > 1 ? 5 : 9, total = rules.length * (GENS + 1);
   const mats = allowedSoft(), weights = formBandWeights(), sKey = structureKey(), rand = G.rng(97 + state.fSeed++ * 7919), made = [];
-  let steps = 0;
+  let steps = 0, field = null;
+  if (rules.includes("membrane")) {
+    field = await computeField();
+    if (!field) { state.fGrowing = false; renderOptbar(); renderStatus(); return; }
+  }
+  const job = field && { data: field.data, nx: field.nx, nz: field.nz, rhythm: field.rhythm || null };
   try {
     for (const rule of rules) {
       const n = G.geneCount(rule);
-      let pop = Array.from({ length: P }, () => Array.from({ length: n }, rand)), best = null;
+      // Genware's library of seeds: kept genomes (and slight variations) start the population.
+      const seeds = (state.seeds[rule] || []).filter((g) => g.length === n), nSeed = Math.min(seeds.length * 2, Math.floor(P / 2));
+      let pop = Array.from({ length: P }, (_, i) => (i < nSeed ? seeds[i % seeds.length].map((x) => (i < seeds.length ? x : Math.min(1, Math.max(0, x + (rand() - 0.5) * 0.2)))) : Array.from({ length: n }, rand))), best = null;
       for (let gen = 0; gen <= GENS; gen++) {
         const res = await Promise.all(pop.map((genes) => {
           const material = mats[Math.min(mats.length - 1, Math.floor(genes[n - 1] * mats.length))], m = E.FELTS[material];
           return Pool.run("evaluate", { rule, genes, mount: state.fMount, size: state.fSize, material: { sigma: m.sigma, density: m.density }, budget: state.fBudget, weights,
-            structureDensity: E.RIGIDS[sKey].density }).then((r) => ({ ...r, material, structureMat: sKey }));
+            structureDensity: E.RIGIDS[sKey].density, field: rule === "membrane" ? job : null })
+            .then((r) => ({ ...r, material, structureMat: sKey, ...(rule === "membrane" ? { srcField: job, sourceLabel: field.label } : {}) }));
         }));
         for (const r of res) if (!best || r.fitness > best.fitness) best = r;
         state.fLive = best; state.fProgress = ++steps / total;
@@ -1392,13 +1408,14 @@ function formBars(f) {
 }
 
 function renderFormsCanvas() {
+  if (!state.fLive && state.fRule === "membrane" && !selMembrane()) { gwIntro(); return; }
   const c = $("#canvas"), f = state.fLive || selForm(), growing = !!state.fLive;
   if (!f) {
     FormView.detach(); FormWave.stop();
     c.innerHTML = `<div class="artboard"><div class="card-head"><h2>Grow forms in space</h2><span class="muted">Not panels: free objects, the way nature would answer</span></div>
       <p>Pick a growth rule in the toolbar (or all five), choose <strong>Hanging</strong> or <strong>Standing</strong>, set the size and how much material one piece may use, then press <strong>Grow</strong>.
       Every candidate is tested by sending sound waves through a room with the form in it. Evolution keeps the forms that make the sound die away fastest.</p>
-      ${[["Natural growth", NATURAL], ["Sheet hybrids: felt sheets arranged by nature", HYBRID]].map(([title, keys]) => `<h3>${title}</h3><div class="art-grid">${keys.map((k) => `<button class="art-card" data-rule-pick="${k}"><div class="row"><strong>${G.RULES[k].name}</strong><span class="pill">${icon(k)}</span></div>
+      ${[["Natural growth", NATURAL], ["Sheet hybrids: felt sheets arranged by nature", HYBRID], ["Sound-grown, after Biothing's Genware", ["membrane"]]].map(([title, keys]) => `<h3>${title}</h3><div class="art-grid">${keys.map((k) => `<button class="art-card" data-rule-pick="${k}"><div class="row"><strong>${G.RULES[k].name}</strong><span class="pill">${icon(k)}</span></div>
         <span class="muted">Imitates ${G.RULES[k].imitates}</span><span>${G.RULES[k].idea}</span></button>`).join("")}</div>`).join("")}
       <p class="hint">Freestanding pieces grow a holdfast (splayed roots or a weighted plinth) and must pass a tipping test: they have to lean at least ${G.MIN_TIP_ANGLE}° before toppling.</p></div>`;
     return;
@@ -1414,6 +1431,7 @@ function renderFormsCanvas() {
       ${f.stance ? `<div class="kpi"><span class="kicker">Stands on its own</span><b>${fix(f.stance.angle, 0)}°</b><span><span class="status-pill ${f.stance.ok ? "ok" : "bad"}">${f.stance.ok ? "stable" : "would topple"}</span> <span class="hint">${stanceText(f)}</span></span></div>` : ""}
       <div class="kpi"><span class="kicker">Versus a flat panel</span><b>${ratio ? fix(ratio, 1) + "×" : "…"}</b><span class="hint">same material and kg, 50 mm on a wall</span></div>
     </div>
+    ${growing ? "" : membraneCard(f)}
     <div class="card"><div class="card-head"><h3>The form against a flat panel of the same material</h3>
       <div class="legend"><span><i class="box" style="background:var(--accent)"></i>this form</span><span><i class="box" style="background:#6a6e76"></i>flat 50 mm panel, same kg</span></div></div>
       <div class="chart-scroll">${formBars(f)}</div>
@@ -1423,6 +1441,7 @@ function renderFormsCanvas() {
       <p class="hint">A slice through a 6 m room. A burst of sound starts in the bottom-left corner (orange and blue are high and low pressure). Green is the form. On the right: how fast the sound dies away. In an empty room it would keep ringing.</p>
       <div class="wave-wrap"><canvas id="wave-canvas" aria-label="Sound waves in the room"></canvas><svg id="wave-energy" viewBox="0 0 300 140" role="img" aria-label="Sound energy over time"></svg></div></div>`}`;
   FormView.show($("#fv-slot"), f);
+  if (!growing) drawMembraneCard(f);
   if (!growing) {
     FormWave.start(f, state.fBand);
     $$("[data-band]").forEach((b) => b.onclick = () => { state.fBand = Number(b.dataset.band); renderFormsCanvas(); });
@@ -1449,38 +1468,48 @@ function formsPropsPanel() {
     <dl class="facts"><dt>Lives</dt><dd>${f.mount}</dd><dt>Envelope</dt><dd>${fix(f.size, 1)} m</dd><dt>Absorbs</dt><dd>${f.area.map((a) => fix(a, 2)).join(" / ")} m²</dd>
       <dt>Per kg</dt><dd>${fix(f.perKg, 2)} m²</dd><dt>vs panel</dt><dd>${bs ? fix(f.score / bs, 1) + "×" : "measuring…"}</dd></dl>
     <div class="chips"><button class="chip" data-ask="Explain the ${esc(f.name)} form in simple words: why does it absorb sound this well or badly, and what would nature change?">Ask the guide</button>
+      <button class="chip" id="form-seed">${(state.seeds[f.rule] || []).some((g) => g.join() === f.genes.join()) ? "In the seed library ✓" : "Add to seed library"}</button>
       <button class="chip" id="form-obj" ${downloads ? "" : "hidden"}>Export 3D (OBJ)</button><button class="chip" id="form-to-space">Use in Spaces</button></div></div></details>`;
 }
 function formsLayersPanel() {
   const list = state.forms.slice().sort((a, b) => b.fitness - a.fitness);
+  const nSeeds = Object.values(state.seeds).reduce((a, l) => a + l.length, 0);
   return `<details class="panel" open id="panel-forms"><summary>Grown forms</summary><div class="panel-body">
+    <p class="hint">Seed library: ${nSeeds ? `${nSeeds} seed${nSeeds === 1 ? "" : "s"}. New growth starts from them, so what grows feeds back into what grows next. <button class="chip" id="seeds-clear">Clear</button>` : "empty. Add forms you like (Properties) and growth will start from them."}</p>
     ${list.map((f) => `<button class="layer" data-form-pick="${f.id}" aria-pressed="${state.formSel === f.id}">
       <span class="thumb rule-thumb">${icon(f.rule)}</span><span><strong>${esc(f.name)}</strong><small>${f.mount} · ${fix(f.mass, 1)} kg · ${esc(E.FELTS[f.material].name)}</small></span>
       <span class="mono">${fix(f.score, 2)} m²</span></button>`).join("") || '<p class="hint">Nothing grown yet. Press Grow in the options bar.</p>'}</div></details>`;
 }
 function bindFormsDock() {
   $$("[data-form-pick]").forEach((b) => b.onclick = () => { state.formSel = Number(b.dataset.formPick); renderFormsCanvas(); renderDock(); });
+  if ($("#seeds-clear")) $("#seeds-clear").onclick = () => { state.seeds = {}; renderDock(); };
   const f = selForm();
   if (!f) return;
   if ($("#form-obj")) $("#form-obj").onclick = (e) => saveFile(`biothing-${f.rule}-${f.id}.obj`, formOBJ(f), e.target);
+  $("#form-seed").onclick = () => {
+    const lib = (state.seeds[f.rule] = state.seeds[f.rule] || []);
+    if (!lib.some((g) => g.join() === f.genes.join())) lib.push(f.genes.slice());
+    addMsg("note", `“${f.name}” is in the seed library. Next time you grow ${G.RULES[f.rule].name.toLowerCase()}, evolution starts from it.`);
+    renderDock();
+  };
   $("#form-to-space").onclick = () => { const sp = curSpace(); if (sp) addPlacement(sp, "form:" + f.id); setWorkspace("spaces"); };
   $("#try-mat").onchange = async (e) => {
     const key = e.target.value;
     if (!key) return;
     e.target.disabled = true;
     const m = E.FELTS[key], sKey = f.structureMat || structureKey();
-    const r = await Pool.run("evaluate", { rule: f.rule, genes: f.genes, mount: f.mount, size: f.size, material: { sigma: m.sigma, density: m.density }, budget: state.fBudget, weights: formBandWeights(), structureDensity: E.RIGIDS[sKey].density });
-    const g = addForm({ ...r, material: key, structureMat: sKey }, `${f.name} in ${m.name.toLowerCase()}`);
+    const r = await Pool.run("evaluate", { rule: f.rule, genes: f.genes, mount: f.mount, size: f.size, material: { sigma: m.sigma, density: m.density }, budget: state.fBudget, weights: formBandWeights(), structureDensity: E.RIGIDS[sKey].density, field: f.srcField || null });
+    const g = addForm({ ...r, material: key, structureMat: sKey, srcField: f.srcField, sourceLabel: f.sourceLabel }, `${f.name} in ${m.name.toLowerCase()}`);
     state.formSel = g.id;
     renderFormsCanvas(); renderDock();
   };
 }
 
 // "4 splayed roots, 70 cm across" or "a 60 cm plinth", in birch plywood, with the flare.
+// "3 splayed roots, 108 cm footprint, in birch plywood (0.7 kg)".
 function stanceText(f) {
-  const n = G.RULES[f.rule].genes.length, st = f.genes.slice(n, n + G.STANCE), across = Math.round(2 * f.stance.support / Math.max(0.01, st[1] < 0.5 ? Math.cos(Math.PI / (3 + Math.floor(st[3] * 3.999))) : 1) * 100);
   const sm = E.RIGIDS[f.structureMat || structureKey()].name.toLowerCase();
-  return (st[1] < 0.5 ? `${3 + Math.floor(st[3] * 3.999)} splayed roots ${across} cm across` : `a ${across} cm plinth`) + ` in ${sm} (${fix(f.stance.structureMass, 1)} kg)` + (st[0] > 0.3 ? ", widening towards the floor" : "");
+  return `${f.holdfast || "a holdfast"}, ${Math.round(f.stance.across * 100)} cm footprint, in ${sm} (${fix(f.stance.structureMass, 1)} kg)`;
 }
 
 // A light OBJ: 8-sided tubes for branches, low-poly balls for spheres and joints. Metres, z up.
@@ -1668,6 +1697,210 @@ const FormWave = (() => {
   };
 })();
 
+// --------------------------------------------------------------- genware ---
+// Sound-grown membranes, after Biothing's Genware: a sound becomes a structural field that grows
+// a cellular membrane. Three sources: the target sound, a sound file, or a room's own resonances.
+ICONS.membrane = '<path d="M2 9 C4 3 6 3 8 9 S12 15 14 9 S18 3 18 9"/><path d="M3 16 H17"/>';
+state.gw = { source: "target", spaceId: null, file: null, field: null, key: "", busy: false };
+state.seeds = {}; // Genware's "library of seeds": genomes the designer keeps, per growth rule
+
+function gwRoom() {
+  const sp = state.spaces.find((s) => s.id === state.gw.spaceId) || curSpace();
+  if (!sp) return { name: "a 6 m test room", L: 6, W: 5, H: 3.5, id: null };
+  const { min, max } = sp.info, a = max[0] - min[0], b = max[1] - min[1];
+  return { name: sp.name, L: Math.max(a, b), W: Math.min(a, b), H: max[2] - min[2], id: sp.id };
+}
+const gwKey = () => JSON.stringify([state.gw.source, gwRoom(), state.fSize, state.fMount, state.target, state.gw.file && state.gw.file.name]);
+function gwLabel() {
+  const room = gwRoom().name, f = state.gw.file;
+  if (state.gw.source === "file") return `your recording “${f.name}”${f.bpm ? ` (${Math.round(f.bpm)} BPM)` : ""} in ${room}`;
+  if (state.gw.source === "room") return `the resonances of ${room}`;
+  return `${TARGET_INFO[state.target].label.toLowerCase()} in ${room}`;
+}
+const selMembrane = () => { const f = selForm(); return f && f.rule === "membrane" ? f : null; };
+
+async function computeField() {
+  if (state.gw.field && state.gw.key === gwKey()) return state.gw.field;
+  if (state.gw.busy) return null;
+  if (state.gw.source === "file" && !state.gw.file) { addMsg("note", "Choose a sound file first, or pick another sound source."); return null; }
+  state.gw.busy = true;
+  renderDock();
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    const room = gwRoom(), env = G.envelope(state.fSize, state.fMount);
+    const L = Math.min(16, Math.max(3, room.L)), H = Math.min(6, Math.max(2.4, room.H)), W = Math.max(2, room.W);
+    const x0 = 0.62 * L, width = state.fSize, height = env.height, zBase = state.fMount === "hanging" ? Math.max(0, H - height) : 0;
+    let field;
+    if (state.gw.source === "room") field = G.fieldFromModes({ L, W, H, x0, y0: 0.37 * W, width, height, zBase });
+    else {
+      const sec = { w: L, h: H, cx: x0 }, src = [Math.max(0.5, x0 - 2), Math.min(H - 0.3, 1.5)];
+      field = state.gw.source === "file"
+        ? G.fieldFromSound({ room: sec, signal: state.gw.file.signal, x0, width, height, src, zBase })
+        : G.fieldFromSound({ room: sec, weights: formBandWeights(), x0, width, height, src, zBase });
+      if (state.gw.source === "file") field.rhythm = { bpm: state.gw.file.bpm, strength: state.gw.file.strength };
+    }
+    field.label = gwLabel();
+    field.room = { L, W, H };
+    state.gw.field = field; state.gw.key = gwKey();
+  } finally {
+    state.gw.busy = false;
+  }
+  renderDock();
+  if (!selMembrane() && state.ws === "forms") renderFormsCanvas();
+  return state.gw.field;
+}
+
+// Iterative radix-2 FFT (in place); N must be a power of two.
+function fft(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { [re[i], re[j]] = [re[j], re[i]]; [im[i], im[j]] = [im[j], im[i]]; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = (-2 * Math.PI) / len, wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const ar = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci, ai = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
+        re[i + k + len / 2] = re[i + k] - ar; im[i + k + len / 2] = im[i + k] - ai; re[i + k] += ar; im[i + k] += ai;
+        [cr, ci] = [cr * wr - ci * wi, cr * wi + ci * wr];
+      }
+    }
+  }
+}
+
+// Reads a sound file: its rhythm (tempo and how strong the beat is), its loudest 0.3 s resampled
+// to the wave solver's time step (that is what drives the field), and its octave-band balance.
+async function loadSound(file) {
+  if (!file) return;
+  state.gw.busy = true;
+  renderDock();
+  try {
+    const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    const audio = await new Ctx(1, 2, 44100).decodeAudioData(await file.arrayBuffer());
+    const sr = audio.sampleRate, n = Math.min(audio.length, sr * 60), x = new Float32Array(n);
+    for (let c = 0; c < audio.numberOfChannels; c++) { const d = audio.getChannelData(c); for (let i = 0; i < n; i++) x[i] += d[i] / audio.numberOfChannels; }
+    const hop = Math.round(sr * 0.02), frames = Math.max(1, Math.floor(n / hop)), env = new Float32Array(frames);
+    for (let f = 0; f < frames; f++) { let e = 0; for (let i = f * hop; i < Math.min(n, (f + 1) * hop); i++) e += x[i] * x[i]; env[f] = Math.sqrt(e / hop); }
+    const on = env.map((v, i) => Math.max(0, v - (i ? env[i - 1] : 0))), mean = on.reduce((a, b) => a + b, 0) / frames, oc = on.map((v) => v - mean);
+    const ac = (lag) => { let s = 0; for (let i = lag; i < frames; i++) s += oc[i] * oc[i - lag]; return s; };
+    const a0 = ac(0) || 1;
+    let bestLag = 0, best = -Infinity;
+    for (let lag = 15; lag <= 75 && lag < frames; lag++) { const v = ac(lag); if (v > best) { best = v; bestLag = lag; } }
+    const strength = Math.max(0, Math.min(1, (best / a0) * 2)), bpm = bestLag && strength > 0.05 ? 60 / (bestLag * 0.02) : 0;
+    const win = 15;
+    let pk = -1, pkAt = 0;
+    for (let f = 0; f + win <= frames; f++) { let s = 0; for (let k = 0; k < win; k++) s += env[f + k]; if (s > pk) { pk = s; pkAt = f; } }
+    const dt = G.solverStep(), start = pkAt * hop, len = Math.round(0.3 / dt), sig = new Float32Array(len), stepS = sr * dt;
+    for (let i = 0; i < len; i++) {
+      const a = Math.floor(start + i * stepS), b = Math.min(n, Math.floor(start + (i + 1) * stepS));
+      let s = 0;
+      for (let j = a; j < b; j++) s += x[j];
+      sig[i] = b > a ? s / (b - a) : 0;
+    }
+    let peak = 1e-9;
+    for (const v of sig) peak = Math.max(peak, Math.abs(v));
+    for (let i = 0; i < len; i++) sig[i] /= peak;
+    const N = 8192, re = new Float32Array(N), im = new Float32Array(N);
+    for (let i = 0; i < N; i++) { const j = start + i; re[i] = (j < n ? x[j] : 0) * (0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (N - 1))); }
+    fft(re, im);
+    const bands = [125, 250, 500, 1000, 2000, 4000].map((fc) => {
+      let e = 0;
+      for (let k = Math.floor((fc / Math.SQRT2 / sr) * N); k <= Math.ceil((fc * Math.SQRT2 / sr) * N) && k < N / 2; k++) e += re[k] * re[k] + im[k] * im[k];
+      return e;
+    });
+    const bmax = Math.max(...bands) || 1;
+    state.gw.file = { name: file.name, duration: audio.duration, signal: sig, bpm, strength, bands: bands.map((b) => b / bmax) };
+    state.gw.source = "file"; state.gw.field = null;
+    addMsg("note", `Listened to “${file.name}”: ${bpm ? `about ${Math.round(bpm)} beats per minute` : "no clear beat"}, loudest around ${hz([125, 250, 500, 1000, 2000, 4000][bands.indexOf(bmax)])}.`);
+  } catch (err) {
+    addMsg("note", "Could not read that sound file. Try a WAV or MP3 recording.");
+  } finally {
+    state.gw.busy = false;
+  }
+  renderDock();
+  if (state.ws === "forms") renderFormsCanvas();
+}
+
+// Heat map of a field (dark = calm air, yellow = where the air moves most), with membrane cells on top.
+function drawField(cv, field, parts, width, height, mount) {
+  if (!cv || !field) return;
+  const W = 240, Hp = Math.max(60, Math.round((240 * height) / width)), { nx, nz, data } = field;
+  cv.width = W; cv.height = Hp;
+  const ctx = cv.getContext("2d"), img = ctx.createImageData(W, Hp), stops = [[20, 21, 24], [47, 125, 85], [230, 195, 74]];
+  for (let y = 0; y < Hp; y++) for (let x = 0; x < W; x++) {
+    const u = (x / (W - 1)) * (nx - 1), v = (1 - y / (Hp - 1)) * (nz - 1), i = Math.min(nx - 2, Math.floor(u)), k = Math.min(nz - 2, Math.floor(v)), fu = u - i, fv = v - k;
+    const q = (a, b) => data[a + nx * b], f = (q(i, k) * (1 - fu) + q(i + 1, k) * fu) * (1 - fv) + (q(i, k + 1) * (1 - fu) + q(i + 1, k + 1) * fu) * fv;
+    const t = Math.max(0, Math.min(1, f)) * 2, a = stops[Math.min(1, Math.floor(t))], b = stops[Math.min(2, Math.floor(t) + 1)], w = t - Math.floor(t), d = 4 * (x + W * y);
+    img.data[d] = a[0] + (b[0] - a[0]) * w; img.data[d + 1] = a[1] + (b[1] - a[1]) * w; img.data[d + 2] = a[2] + (b[2] - a[2]) * w; img.data[d + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  if (!parts) return;
+  ctx.strokeStyle = "rgba(255,255,255,0.75)"; ctx.lineWidth = 1;
+  for (const p of parts) {
+    if (!G.isSheet(p) || p.structure) continue;
+    const z = p.c[2] + (mount === "hanging" ? height : 0), hu = Math.hypot(p.u[0], p.u[1]), hv = Math.hypot(...p.v);
+    const px = (p.c[0] / width + 0.5) * W, py = (1 - z / height) * Hp, sx = (hu / width) * W, sy = (hv / height) * Hp;
+    ctx.strokeRect(px - sx, py - sy, 2 * sx, 2 * sy);
+  }
+}
+const bandsMini = (bands) => `<div class="mini-bands" aria-label="Sound balance by octave">${bands.map((b, i) => `<span><i style="height:${Math.max(6, b * 100)}%"></i><small>${["125", "250", "500", "1k", "2k", "4k"][i]}</small></span>`).join("")}</div>`;
+
+function gwIntro() {
+  const c = $("#canvas"), g = state.gw, ready = g.field && g.key === gwKey();
+  FormView.detach(); FormWave.stop();
+  c.innerHTML = `<div class="artboard"><div class="card-head"><h2>Sound-grown membrane</h2><span class="muted">After Biothing's Genware: sound patterns become structural fields</span></div>
+      <p>A sound is sent into the room. Where the air moves most, the porous felt works hardest, so that is where the membrane's cells grow <strong>smaller, thicker and closer</strong>; where the air is calm they <strong>open up</strong>.
+      Over three rounds the field is lowered wherever the membrane already absorbs, so growth spreads to where sound is still strong: form and sound shape each other.
+      The result is a porous, freestanding interface, not a wall.</p></div>
+    <div class="card"><div class="card-head"><h3>The structural field</h3><span class="hint">${ready ? "From " + esc(g.field.label) : "Choose a sound source in the panel on the right, then compute the field"}</span></div>
+      <div class="field-pair"><div><canvas id="gw-field" class="field-canvas" aria-label="Sound field over the membrane"></canvas><p class="hint">Front view of the membrane's area: ${fix(state.fSize, 1)} m wide, ${fix(G.envelope(state.fSize, state.fMount).height, 1)} m high. Bright = air moving most.</p></div>
+      <div class="group"><button class="btn primary" id="gw-compute2" ${g.busy ? "disabled" : ""}>${g.busy ? "Listening…" : ready ? "Recompute" : "Compute the sound field"}</button>
+        ${ready && g.field.modes ? `<p class="hint">The room rings at ${g.field.modes.length} pitches in the voice range (${fix(g.field.modes[0].f, 0)}–${fix(g.field.modes[g.field.modes.length - 1].f, 0)} Hz). Their standing waves overlap into the pattern, like sand on a Chladni plate.</p>` : ""}
+        ${ready && g.field.rhythm && g.field.rhythm.bpm ? `<p class="hint">Rhythm: about ${Math.round(g.field.rhythm.bpm)} BPM. The membrane can let it set bands of smaller and larger cells up its height.</p>` : ""}
+        <p class="hint">Then press <strong>Grow</strong>: evolution tunes how the cells react (size, thickness, openness, folding, plan curve, feet) and keeps the membranes that absorb most and stand safely.</p></div></div></div>`;
+  if (ready) drawField($("#gw-field"), g.field, null, state.fSize, G.envelope(state.fSize, state.fMount).height, state.fMount);
+  $("#gw-compute2").onclick = () => { state.gw.field = null; computeField(); };
+}
+
+function soundPanel() {
+  if (state.fRule !== "membrane") return "";
+  const g = state.gw, room = gwRoom(), fl = g.file, ready = g.field && g.key === gwKey();
+  return `<details class="panel" open id="panel-sound"><summary>Sound source</summary><div class="panel-body">
+    <label class="matrow"><input type="radio" name="gw-src" value="target" ${g.source === "target" ? "checked" : ""}><span>Target sound<small>${TARGET_INFO[state.target].label} (set it in the Shapes workspace)</small></span><span></span></label>
+    <label class="matrow"><input type="radio" name="gw-src" value="file" ${g.source === "file" ? "checked" : ""} ${fl ? "" : "disabled"}><span>A sound file<small>${fl ? `${esc(fl.name)} · ${fl.bpm ? Math.round(fl.bpm) + " BPM" : "no clear beat"}` : "a recording of your hall, voices or music"}</small></span><span></span></label>
+    <div class="chips"><button class="chip" id="gw-file-btn">${fl ? "Choose another file…" : "Choose sound file…"}</button><input type="file" id="gw-file" accept="audio/*" hidden></div>
+    ${fl ? bandsMini(fl.bands) : ""}
+    <label class="matrow"><input type="radio" name="gw-src" value="room" ${g.source === "room" ? "checked" : ""}><span>Room resonances<small>the low pitches that ring in the room below</small></span><span></span></label>
+    <div class="formgrid"><label for="gw-space">Room</label><select id="gw-space">${state.spaces.map((s) => `<option value="${s.id}" ${s.id === room.id ? "selected" : ""}>${esc(s.name)}</option>`).join("") || "<option>6 m test room</option>"}</select></div>
+    <button class="btn small" id="gw-compute" ${g.busy ? "disabled" : ""}>${g.busy ? "Listening…" : ready ? "Field ready ✓" : "Compute the sound field"}</button></div></details>`;
+}
+function bindSoundPanel() {
+  if (!$("#panel-sound")) return;
+  $$('input[name="gw-src"]').forEach((r) => r.onchange = () => { state.gw.source = r.value; state.gw.field = null; renderDock(); renderFormsCanvas(); });
+  $("#gw-file-btn").onclick = () => $("#gw-file").click();
+  $("#gw-file").onchange = (e) => loadSound(e.target.files[0]);
+  $("#gw-space").onchange = (e) => { state.gw.spaceId = Number(e.target.value) || null; state.gw.field = null; renderDock(); renderFormsCanvas(); };
+  $("#gw-compute").onclick = () => { state.gw.field = null; computeField(); };
+}
+
+// For a grown membrane: the field it started from, and the field after it reshaped it.
+function membraneCard(f) {
+  if (f.rule !== "membrane" || !f.srcField) return "";
+  return `<div class="card"><div class="card-head"><h3>Sound and form shaping each other</h3><span class="hint">From ${esc(f.sourceLabel || "the sound field")}</span></div>
+    <div class="field-pair"><div><canvas id="mf-before" class="field-canvas" aria-label="Sound field before growth"></canvas><p class="hint">The sound field: bright where the air moves most.</p></div>
+      <div><canvas id="mf-after" class="field-canvas" aria-label="Field after growth with the membrane cells"></canvas><p class="hint">After three rounds: the field is lowered where cells already absorb, and the cells (outlines) settle accordingly.</p></div></div></div>`;
+}
+function drawMembraneCard(f) {
+  if (f.rule !== "membrane" || !f.srcField) return;
+  const H = G.envelope(f.size, f.mount).height, parts = primsOf(f.prims);
+  drawField($("#mf-before"), f.srcField, null, f.size, H, f.mount);
+  drawField($("#mf-after"), f.fieldMap ? { ...f.srcField, data: f.fieldMap } : f.srcField, parts, f.size, H, f.mount);
+}
+
 // ------------------------------------------------------------- status bar --
 function renderStatus() {
   const s = $("#status");
@@ -1690,7 +1923,7 @@ function renderStatus() {
 const TIPS = {
   shapes: { text: "Set what to quiet, the <strong>depth</strong> and the <strong>material budget</strong> in the bar above, then press <strong>Grow shapes</strong>. Pick any shape to inspect it.",
     chips: ["Why did this shape win?", "How deep should it be?", "How would I make it?"] },
-  forms: { text: "Pick a <strong>growth rule</strong> (natural, or sheet hybrids) in the toolbar and a <strong>material</strong> in the bar above, then press <strong>Grow</strong>. Freestanding pieces must pass a tipping test; every candidate is tested with sound waves.",
+  forms: { text: "Pick a <strong>growth rule</strong> (natural, sheet hybrids, or the sound-grown membrane) in the toolbar and a <strong>material</strong> in the bar above, then press <strong>Grow</strong>. Freestanding pieces must pass a tipping test; every candidate is tested with sound waves.",
     chips: ["Which form works best?", "Why does thickness matter?", "How would I make this form?"] },
   materials: { text: "Tick the materials you like. The chart shows each one as a plain flat layer, so you see the material before any shaping.",
     chips: ["Which material is best for me?", "Explain the chart", "Which are the most natural?"] },
@@ -1704,7 +1937,7 @@ function renderGuideTip() {
 }
 document.addEventListener("click", (e) => { const c = e.target.closest("[data-ask]"); if (c) ask(c.dataset.ask); });
 
-const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing): panel-like shapes in the Shapes workspace, and free objects in the Forms workspace. The product must be freestanding: standing forms grow a holdfast (splayed roots or a plinth) and must lean 10 degrees before toppling. Forms come from natural rules (branching tree, snow crystal, folding coral, spiral shell, foam) or sheet hybrids (felt sheets arranged as a leaf canopy, mushroom gills, pine cone or twisted lamellae), each tested in a 2D wave simulator that reads about 25% conservative. It also compares materials, and tests everything in 3D models of exhibition spaces. The person is a designer, not an acoustic engineer.
+const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing): panel-like shapes in the Shapes workspace, and free objects in the Forms workspace. The product must be freestanding: standing forms grow a holdfast (splayed roots or a plinth) and must lean 10 degrees before toppling. Forms come from natural rules (branching tree, snow crystal, folding coral, spiral shell, foam) or sheet hybrids (felt sheets arranged as a leaf canopy, mushroom gills, pine cone or twisted lamellae), or the Sound-grown membrane after Biothing's Genware (a sound source, either the target sound, an uploaded recording or a room's resonances, becomes a field of air motion; a cellular felt membrane grows denser where air moves most and the field is updated by what has grown over three rounds). A seed library keeps genomes the designer likes and starts new growth from them (after Malafouris's essay on Genware as a "library of seeds" changed by what grows). Everything is tested in a 2D wave simulator that reads about 25% conservative. It also compares materials, and tests everything in 3D models of exhibition spaces. The person is a designer, not an acoustic engineer.
 How to answer:
 - Simple, everyday words; explain any technical word in a few words the first time.
 - Short: at most about 120 words unless asked for more. Short paragraphs or a few bullets.
@@ -1719,6 +1952,7 @@ function pageState() {
     state.results ? "Shapes (grown):" : "Shapes (seeds, not grown yet):"];
   for (const f of families()) { const r = current(f.key); if (r) lines.push(`- ${f.name}: ${scoreText(r)}; ${explain(r).join(" ")}`); }
   if (state.ws === "shapes" && state.tool !== "all") lines.push(`Inspecting: ${E.FAMILY[state.tool].name}`);
+  lines.push(`Sound source for membranes: ${gwLabel()}${state.gw.field ? " (field computed)" : ""}${state.gw.file ? `; file ${state.gw.file.name}, ${Math.round(state.gw.file.bpm)} BPM` : ""}; seed library: ${Object.entries(state.seeds).map(([k, l]) => `${l.length} ${k}`).join(", ") || "empty"}`);
   lines.push(`Forms settings: ${state.fMount === "standing" ? "freestanding" : "hanging"}, size ${state.fSize} m, material per piece ${state.fBudget} kg, rule ${state.fRule}; material choice: ${state.matPick === "auto" ? "best of the ticked materials" : E.FELTS[state.matPick].name}`);
   for (const f of state.forms) lines.push(`- Form "${f.name}"${f.id === state.formSel ? " (selected)" : ""}: ${f.mount}, ${G.RULES[f.rule].describe(f.genes)} ${E.FELTS[f.material].name}, ${fix(f.mass, 1)} kg; absorption ${f.area.map((a) => fix(a, 2)).join("/")} m2 at 250/500/1000 Hz; ${fix(f.perKg, 2)} m2 per kg${f.stance ? `; freestanding on ${stanceText(f)}, tips at ${fix(f.stance.angle, 0)} degrees (${f.stance.ok ? "stable" : "unstable"})` : ""}${f.baseline ? `; flat panel with the same kg: ${f.baseline.map((a) => fix(a, 2)).join("/")} m2` : ""}`);
   if (state.ranking) lines.push(`Material ranking for ${E.FAMILY[state.ranking.family].name}: ${state.ranking.rows.map((r) => `${E.FELTS[r.params.porous].name} ${pct(r.score)}`).join(", ")}`);
@@ -1774,10 +2008,11 @@ const TOUR = [
   { ws: "shapes", sel: "#panel-layers", title: "5. Layers", text: "The grown shapes, ranked. Click any to open it; Properties explains it in plain words." },
   { ws: "forms", sel: "#tools", title: "6. Forms: growth rules", text: "Not panels: free objects. Each tool is a rule from nature: branching tree, snow crystal, folding coral, spiral shell, foam." },
   { ws: "forms", sel: "#opt-mount", title: "7. Freestanding", text: "Freestanding pieces grow a holdfast (roots or a plinth) and must lean at least 10° before toppling. Pick the material, size and material per piece, then press Grow." },
-  { ws: "materials", sel: "#panel-materials", title: "8. Materials", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
-  { ws: "spaces", sel: "#panel-spaces", title: "9. Your spaces", text: "Each exhibition area is its own 3D model. Add a ready-made room, or import an OBJ from Rhino, SketchUp or Blender." },
-  { ws: "spaces", sel: "#panel-absorbers", title: "10. Place absorbers", text: "Add grown shapes to the space. The lab tells you how many m² reach the recommended echo, and how much the crowd noise drops." },
-  { ws: "spaces", sel: "#panel-guide", title: "11. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
+  { ws: "forms", rule: "membrane", sel: "#panel-sound", title: "8. Sound draws the form", text: "After Biothing's Genware: choose a sound (your target, a recording, or a room's resonances). Where the air moves most, the membrane grows denser. Keep forms you like in the seed library: new growth starts from them." },
+  { ws: "materials", sel: "#panel-materials", title: "9. Materials", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
+  { ws: "spaces", sel: "#panel-spaces", title: "10. Your spaces", text: "Each exhibition area is its own 3D model. Add a ready-made room, or import an OBJ from Rhino, SketchUp or Blender." },
+  { ws: "spaces", sel: "#panel-absorbers", title: "11. Place absorbers", text: "Add grown shapes to the space. The lab tells you how many m² reach the recommended echo, and how much the crowd noise drops." },
+  { ws: "spaces", sel: "#panel-guide", title: "12. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
 ];
 let tourAt = -1;
 function tour(i) {
@@ -1786,6 +2021,7 @@ function tour(i) {
   if (i < 0 || i >= TOUR.length) { box.hidden = true; tourAt = -1; return; }
   tourAt = i;
   const step = TOUR[i];
+  if (step.rule && state.fRule !== step.rule) { state.fRule = step.rule; if (state.ws === step.ws) renderAll(); }
   if (state.ws !== step.ws) setWorkspace(step.ws);
   const target = $(step.sel);
   box.innerHTML = `<span class="kicker">Guided tour · ${i + 1} of ${TOUR.length}</span><h3>${step.title}</h3><p>${step.text}</p>
