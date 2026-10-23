@@ -106,6 +106,17 @@ tr.current td { background: var(--panel-2); }
 .swatches { display: inline-flex; gap: 12px; flex-wrap: wrap; color: #44474d; }
 .swatches span { display: inline-flex; align-items: center; gap: 6px; }
 .swatches i { width: 12px; height: 12px; border-radius: 3px; border: 1px solid #b9babd; display: inline-block; }
+.segd { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.segd button { border: 0; background: var(--app); color: var(--muted); padding: 4px 12px; cursor: pointer; font-weight: 600; }
+.segd button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.wave-wrap { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.wave-wrap canvas { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 4px; background: #101114; }
+.wave-wrap svg { width: 100%; height: auto; display: block; border-radius: 4px; }
+.chip[aria-pressed="true"] { border-color: var(--accent); background: var(--raised); }
+.rule-thumb { display: grid; place-items: center; height: 40px; color: #2f7d55; }
+.rule-thumb svg { width: 22px !important; height: 22px !important; }
+.art-card .pill svg { width: 14px; height: 14px; vertical-align: middle; }
+@media (max-width: 700px) { .wave-wrap { grid-template-columns: minmax(0, 1fr); } }
 .viewport .hud { position: absolute; left: 10px; top: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
 .viewport .fallback { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; text-align: center; color: var(--muted); }
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
@@ -202,6 +213,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     <span class="appname">Biothing Sound Lab</span>
     <div class="tabs" role="tablist" id="ws-tabs" aria-label="Workspaces">
       <button role="tab" data-ws="shapes" id="tab-shapes">Shapes</button>
+      <button role="tab" data-ws="forms" id="tab-forms">Forms</button>
       <button role="tab" data-ws="materials" id="tab-materials">Materials</button>
       <button role="tab" data-ws="spaces" id="tab-spaces">Spaces</button>
     </div>
@@ -237,6 +249,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>/*ENGINE*/</script>
 <script>/*ROOMS*/</script>
+<script id="growth-src">/*GROWTH*/</script>
 <script>
 "use strict";
 const E = window.Engine, R = window.Rooms;
@@ -263,6 +276,7 @@ const state = {
   results: null, preview: {}, seed: 1, growing: false, progress: 0, ranking: null,
   flatThick: 50, matView: "chart", view: "3d",
   spaces: [], spaceId: null, yUp: false, showAbs: true, nextId: 1,
+  fMount: "hanging", fRule: "all", fSize: 1.2, fBudget: 4, forms: [], formSel: null, fGrowing: false, fProgress: 0, fNext: 1, fSeed: 1, fLive: null, fBand: 500,
 };
 const brief = () => ({ target: state.target, maxDepth: state.depth, massBudget: state.mass, porous: [...state.porous], rigid: [...state.rigid] });
 const families = () => E.FAMILIES.filter((f) => state.hang || f.mounting !== "hanging");
@@ -302,6 +316,7 @@ function setWorkspace(ws) { state.ws = ws; renderAll(); }
 
 function renderOptbar() {
   const ob = $("#optbar");
+  if (state.ws === "forms") { renderFormsBar(ob); return; }
   if (state.ws === "spaces") {
     ob.innerHTML = `<div class="opt" id="opt-add"><label for="add-preset">Add a space</label>
         <select id="add-preset">${R.PRESETS.map((p) => `<option value="${p.key}">${p.name} (${p.size.join(" × ")} m)</option>`).join("")}</select>
@@ -345,10 +360,11 @@ function renderTools() {
   let items;
   if (state.ws === "shapes") items = [["all", "All shapes side by side"], "sep", ...families().map((f) => [f.key, `${f.name}: imitates ${f.imitates}`])];
   else if (state.ws === "materials") items = [["chart", "Compare chart"], ["table", "Material table"]];
+  else if (state.ws === "forms") items = [["all", "All five growth rules"], "sep", ...RULE_KEYS.map((k) => [k, `${G.RULES[k].name}: imitates ${G.RULES[k].imitates}`])];
   else items = [["orbit", "Orbit view (drag in the viewport)"], ["top", "Top view"], ["home", "Reset view"], "sep", ["eye", "Show or hide absorbers"]];
   $("#tools").innerHTML = items.map((it) => it === "sep" ? '<span class="tool-sep" aria-hidden="true"></span>' : (() => {
     const [k, label] = it;
-    const pressed = state.ws === "shapes" ? state.tool === k : state.ws === "materials" ? state.matView === k : k === "eye" ? state.showAbs : false;
+    const pressed = state.ws === "shapes" ? state.tool === k : state.ws === "forms" ? state.fRule === k : state.ws === "materials" ? state.matView === k : k === "eye" ? state.showAbs : false;
     return `<button class="tool" data-tool="${k}" aria-pressed="${pressed}" aria-label="${esc(label)}" title="${esc(label)}">${icon(k)}</button>`;
   })()).join("");
 }
@@ -358,6 +374,7 @@ $("#tools").addEventListener("click", (e) => {
   const k = b.dataset.tool;
   if (state.ws === "shapes") { state.tool = k; renderTools(); renderCanvas(); renderDock(); renderGuideTip(); }
   else if (state.ws === "materials") { state.matView = k; renderTools(); renderCanvas(); }
+  else if (state.ws === "forms") { state.fRule = k; renderTools(); renderOptbar(); if (!selForm()) renderCanvas(); renderDock(); }
   else if (k === "eye") { state.showAbs = !state.showAbs; renderTools(); View3D.update(); }
   else View3D.preset(k);
 });
@@ -540,7 +557,8 @@ const rankedWall = () => families().filter((f) => !isHang(f.key)).map((f) => cur
 
 // --------------------------------------------------------------- canvas ----
 function renderCanvas() {
-  ShapeView.detach();
+  ShapeView.detach(); FormView.detach(); FormWave.stop();
+  if (state.ws === "forms") { View3D.detach(); renderFormsCanvas(); return; }
   if (state.ws === "spaces") { renderSpacesCanvas(); return; }
   View3D.detach();
   const c = $("#canvas");
@@ -610,6 +628,7 @@ function renderDock() {
   const d = $("#dock");
   if (state.ws === "shapes") d.innerHTML = propertiesPanel() + layersPanel();
   else if (state.ws === "materials") d.innerHTML = materialsPanel() + rigidPanel();
+  else if (state.ws === "forms") d.innerHTML = formsPropsPanel() + formsLayersPanel();
   else d.innerHTML = spacesPanel() + spacePropsPanel() + absorbersPanel();
   bindDock();
 }
@@ -675,6 +694,7 @@ function bindDock() {
   if ($("#use-in-space")) $("#use-in-space").onclick = () => { const sp = curSpace(); if (sp) addPlacement(sp, state.tool); setWorkspace("spaces"); };
   if (state.ws === "shapes" && state.tool !== "all") setupDownloads(state.tool, current(state.tool));
   if (state.ws === "spaces") bindSpacesDock();
+  if (state.ws === "forms") bindFormsDock();
 }
 const toggle = (set, k) => (set.has(k) ? set.delete(k) : set.add(k));
 function afterMaterials() { briefChanged(); renderDock(); renderCanvas(); renderStatus(); }
@@ -764,14 +784,17 @@ function importOBJ(file) {
 const curSpace = () => state.spaces.find((s) => s.id === state.spaceId);
 const spaceVolume = (sp) => sp.volumeOverride || sp.info.volume;
 function effAlpha(sp, pl) {
+  if (isForm(pl.family)) return formOct(formOf(pl.family));
   const oct = R.thirdToOctave(current(pl.family).alpha);
   return isHang(pl.family) ? oct : oct.map((a, i) => Math.max(0, a - R.SURFACES[sp.finishes.wall].alpha[i]));
 }
 function spaceCalc(sp) {
   const space = { volume: spaceVolume(sp), areas: sp.info.areas, finishes: sp.finishes, people: sp.people };
-  const abs = sp.placements.filter((pl) => current(pl.family)).map((pl) => ({ area: pl.area, alpha: effAlpha(sp, pl) }));
+  const abs = sp.placements.filter(plValid).map((pl) => ({ area: pl.area, alpha: effAlpha(sp, pl) }));
   return { space, res: R.reverb(space, abs), abs };
 }
+const plValid = (pl) => (isForm(pl.family) ? !!formOf(pl.family) : !!current(pl.family));
+const plName = (key) => (isForm(key) ? (formOf(key) ? formOf(key).name : "removed form") : E.FAMILY[key].name);
 function verdict(rt, target) {
   if (rt > target * 1.2) return ["bad", "too echoey"];
   if (rt < target * 0.7) return ["warn", "very dry"];
@@ -783,18 +806,24 @@ function addPlacement(sp, family) {
   sp.placements.push({ family, area: Math.max(1, Math.round(need || 10)) });
 }
 
+// "12 m² + 4 pieces": shapes are counted in m², grown forms in pieces.
+function absText(sp) {
+  const m2 = sp.placements.filter((p) => !isForm(p.family)).reduce((a, p) => a + p.area, 0);
+  const pcs = sp.placements.filter((p) => isForm(p.family)).reduce((a, p) => a + p.area, 0);
+  return [m2 || !pcs ? `${fix(m2, 0)} m²` : "", pcs ? `${fix(pcs, 0)} piece${pcs === 1 ? "" : "s"}` : ""].filter(Boolean).join(" + ") + " of absorbers";
+}
 function renderSpacesCanvas() {
   const c = $("#canvas"), sp = curSpace();
   if (!sp) { View3D.detach(); c.innerHTML = `<div class="card"><h3>No spaces yet</h3><p class="hint">Add a ready-made room or import your own OBJ model from the options bar.</p></div>`; return; }
   const { res } = spaceCalc(sp);
   const [cls, word] = verdict(res.speechRtAfter, res.target);
-  const absArea = sp.placements.reduce((a, p) => a + p.area, 0);
+
   c.innerHTML = `<div id="vp-slot"></div>
     <div class="kpis">
       <div class="kpi"><span class="kicker">Echo now (voice range)</span><b>${fix(res.speechRtBefore, 2)} s</b><span class="hint">reverberation time</span></div>
       <div class="kpi"><span class="kicker">With absorbers</span><b>${fix(res.speechRtAfter, 2)} s</b><span><span class="status-pill ${cls}">${word}</span></span></div>
       <div class="kpi"><span class="kicker">Recommended</span><b>${fix(res.target, 2)} s</b><span class="hint">for talking, from room volume</span></div>
-      <div class="kpi"><span class="kicker">Crowd noise</span><b>${res.noiseDrop > 0.05 ? "−" + fix(res.noiseDrop, 1) : "0.0"} dB</b><span class="hint">${fix(absArea, 0)} m² of absorbers</span></div>
+      <div class="kpi"><span class="kicker">Crowd noise</span><b>${res.noiseDrop > 0.05 ? "−" + fix(res.noiseDrop, 1) : "0.0"} dB</b><span class="hint">${absText(sp)}</span></div>
     </div>
     <div class="card"><div class="card-head"><h3>Reverberation by pitch: ${esc(sp.name)}</h3>
       <div class="legend"><span><i class="box" style="background:#6a6e76"></i>now</span><span><i class="box" style="background:var(--accent)"></i>with absorbers</span><span><i style="background:var(--signal)"></i>recommended</span></div></div>
@@ -802,7 +831,7 @@ function renderSpacesCanvas() {
       <p class="hint">Reverberation time is how long a sound takes to die away. Shorter means calmer and clearer speech, until it feels “dead”.</p></div>
     <div class="card"><h3>All your spaces</h3><div class="table-wrap"><table><thead><tr><th>Space</th><th class="num">Volume</th><th class="num">Echo now</th><th class="num">With absorbers</th><th class="num">Recommended</th><th class="num">Absorbers</th><th class="num">Noise</th><th>Verdict</th></tr></thead><tbody>
       ${state.spaces.map((s) => { const r2 = spaceCalc(s).res, [c2, w2] = verdict(r2.speechRtAfter, r2.target);
-        return `<tr class="${s.id === sp.id ? "current" : ""}"><td>${esc(s.name)}</td><td class="num">${fix(spaceVolume(s), 0)} m³</td><td class="num">${fix(r2.speechRtBefore, 2)} s</td><td class="num">${fix(r2.speechRtAfter, 2)} s</td><td class="num">${fix(r2.target, 2)} s</td><td class="num">${fix(s.placements.reduce((a, p) => a + p.area, 0), 0)} m²</td><td class="num">−${fix(Math.max(0, r2.noiseDrop), 1)} dB</td><td><span class="status-pill ${c2}">${w2}</span></td></tr>`; }).join("")}
+        return `<tr class="${s.id === sp.id ? "current" : ""}"><td>${esc(s.name)}</td><td class="num">${fix(spaceVolume(s), 0)} m³</td><td class="num">${fix(r2.speechRtBefore, 2)} s</td><td class="num">${fix(r2.speechRtAfter, 2)} s</td><td class="num">${fix(r2.target, 2)} s</td><td class="num">${absText(s)}</td><td class="num">−${fix(Math.max(0, r2.noiseDrop), 1)} dB</td><td><span class="status-pill ${c2}">${w2}</span></td></tr>`; }).join("")}
       </tbody></table></div></div>`;
   View3D.attach($("#vp-slot"), sp);
 }
@@ -834,13 +863,18 @@ function absorbersPanel() {
   if (!sp) return "";
   const { space, abs } = spaceCalc(sp);
   const best = rankedWall()[0], cloud = state.hang ? current("cloud") : null;
-  const sugg = [best, cloud].filter(Boolean).map((r) => ({ r, need: R.areaNeeded(space, effAlpha(sp, { family: r.family }), abs) }));
+  const bestForm = state.forms.slice().sort((a, b) => b.score - a.score)[0];
+  const sugg = [best && best.family, cloud && "cloud", bestForm && "form:" + bestForm.id].filter(Boolean)
+    .map((key) => ({ key, need: R.areaNeeded(space, effAlpha(sp, { family: key }), abs) }));
+  const options = (sel) => families().map((f) => `<option value="${f.key}" ${f.key === sel ? "selected" : ""}>${f.name}${grown(f.key) ? "" : " (seed)"}</option>`).join("")
+    + (state.forms.length ? `<optgroup label="Grown forms">${state.forms.map((f) => `<option value="form:${f.id}" ${"form:" + f.id === sel ? "selected" : ""}>${esc(f.name)} (${f.mount})</option>`).join("")}</optgroup>` : "");
+  const unit = (key) => (isForm(key) ? "pieces" : "m²");
   return `<details class="panel" open id="panel-absorbers"><summary>Absorbers in this space</summary><div class="panel-body">
-    ${sp.placements.map((pl, i) => `<div class="placement"><select data-pl-fam="${i}" aria-label="Shape">${families().map((f) => `<option value="${f.key}" ${f.key === pl.family ? "selected" : ""}>${f.name}${grown(f.key) ? "" : " (seed)"}</option>`).join("")}</select>
-      <input type="number" data-pl-area="${i}" min="0" step="1" value="${pl.area}" aria-label="Area in square metres"><button class="btn small ghost" data-pl-del="${i}" aria-label="Remove">✕</button></div>`).join("") || '<p class="hint">No absorbers yet. Use a suggestion below or add one.</p>'}
-    ${sp.placements.length ? '<p class="hint">Numbers are m² of absorber. Wall shapes replace that much wall finish; clouds hang free.</p>' : ""}
-    ${sugg.map(({ r, need }) => need > 0.5 ? `<div class="suggest"><span>To reach the recommended echo with <strong>${E.FAMILY[r.family].name}</strong>: about <strong class="mono">${fix(need, 0)} m²</strong>${state.results ? "" : " (seed version, grow first for better shapes)"}.</span>
-      <button class="btn small primary" data-suggest="${r.family}" data-need="${Math.round(need)}">Add ${fix(need, 0)} m²</button></div>` : `<p class="hint">${E.FAMILY[r.family].name}: target already reached.</p>`).join("")}
+    ${sp.placements.map((pl, i) => `<div class="placement"><select data-pl-fam="${i}" aria-label="Shape or form">${options(pl.family)}</select>
+      <input type="number" data-pl-area="${i}" min="0" step="1" value="${pl.area}" aria-label="Amount in ${unit(pl.family)}" title="${unit(pl.family)}"><button class="btn small ghost" data-pl-del="${i}" aria-label="Remove">✕</button></div>`).join("") || '<p class="hint">No absorbers yet. Use a suggestion below or add one.</p>'}
+    ${sp.placements.length ? '<p class="hint">Shapes are counted in m² (wall shapes replace that much wall finish; clouds hang free). Grown forms are counted in pieces.</p>' : ""}
+    ${sugg.map(({ key, need }) => need > 0.5 ? `<div class="suggest"><span>To reach the recommended echo with <strong>${esc(plName(key))}</strong>: about <strong class="mono">${fix(need, 0)} ${unit(key)}</strong>.</span>
+      <button class="btn small primary" data-suggest="${key}" data-need="${Math.max(1, Math.round(need))}">Add ${fix(need, 0)} ${unit(key)}</button></div>` : `<p class="hint">${esc(plName(key))}: target already reached.</p>`).join("")}
     <button class="btn small" id="add-placement">Add absorber</button></div></details>`;
 }
 function bindSpacesDock() {
@@ -954,6 +988,19 @@ const View3D = (() => {
     if (!state.showAbs) return;
     const { min, max } = sp.info, W = max[0] - min[0], D = max[1] - min[1], H = max[2] - min[2], panel = 1.2;
     for (const pl of sp.placements) {
+      if (isForm(pl.family)) {
+        const f = formOf(pl.family);
+        if (!f || pl.area <= 0) continue;
+        const n = Math.max(1, Math.min(Math.round(pl.area), Math.floor(60000 / Math.max(1, f.prims.length / 7)))), step = f.size * 1.4;
+        const cols = Math.max(1, Math.floor((W - step) / step) + 1), spots = [];
+        for (let k = 0; k < n; k++) {
+          const i = k % cols, j = Math.floor(k / cols);
+          const x = min[0] + (W - (cols - 1) * step) / 2 + i * step, y = min[1] + step / 2 + 0.5 + j * step;
+          spots.push([x, Math.min(y, max[1] - step / 2), f.mount === "hanging" ? max[2] - 0.3 : min[2]]);
+        }
+        formInstances(f, spots, v.root);
+        continue;
+      }
       const r = current(pl.family);
       if (!r || pl.area <= 0) continue;
       const n = Math.min(400, Math.ceil(pl.area / (panel * panel))), depth = Math.max(0.03, r.params.depth / 1000);
@@ -1162,9 +1209,393 @@ const ShapeView = (() => {
   };
 })();
 
+// ----------------------------------------------------------------- forms ---
+// "Forms": free objects grown by natural rules (hanging or standing), tested in a wave simulator.
+const G = window.Growth;
+const RULE_KEYS = Object.keys(G.RULES);
+Object.assign(ICONS, {
+  tree: '<path d="M10 18 V10 M10 10 L5 5 M10 10 L15 5 M5 5 L3 2 M5 5 L7 2 M15 5 L13 2 M15 5 L17 2"/>',
+  snow: '<path d="M10 2 V18 M3 6 L17 14 M3 14 L17 6 M10 5 L8 3 M10 5 L12 3 M10 15 L8 17 M10 15 L12 17"/>',
+  coral: '<path d="M2 11 C5 7 7 15 10 11 C13 7 15 15 18 11 M10 11 V18"/>',
+  shell: '<path d="M10 10 m0 -1 a1 1 0 1 0 1 1 a2.5 2.5 0 1 0 -2.5 2.5 a4.5 4.5 0 1 0 4.5 -4.5 a7 7 0 1 0 -7 7"/>',
+  foam: '<circle cx="7" cy="7" r="3"/><circle cx="13" cy="9" r="2.2"/><circle cx="9" cy="13.5" r="2.6"/><circle cx="15" cy="15" r="1.6"/>',
+});
+const isForm = (key) => typeof key === "string" && key.startsWith("form:");
+const formOf = (key) => state.forms.find((f) => "form:" + f.id === key);
+const selForm = () => state.forms.find((f) => f.id === state.formSel) || null;
+const formBandWeights = () => { const t = E.TARGETS[state.target], w = G.BANDS.map((b) => t[b] || 0), s = w.reduce((a, b) => a + b, 0) || 1; return w.map((x) => x / s); };
+// Absorption per object per octave 125-4000 Hz. Only 250-1000 Hz are simulated; 125 Hz is taken as half
+// of 250 Hz and the bands above 1 kHz as equal to 1 kHz (porous forms rarely absorb less up there).
+const formOct = (f) => [f.area[0] * 0.5, f.area[0], f.area[1], f.area[2], f.area[2], f.area[2]];
+const primsOf = (flat) => { const out = []; for (let i = 0; i < flat.length; i += 7) out.push({ a: [flat[i], flat[i + 1], flat[i + 2]], b: [flat[i + 3], flat[i + 4], flat[i + 5]], r: flat[i + 6] }); return out; };
+const flatPrims = (prims) => { const f = new Float32Array(prims.length * 7); prims.forEach((p, i) => f.set([...p.a, ...p.b, p.r], i * 7)); return f; };
+const baselineScore = (f) => (f.baseline ? f.baseline.reduce((a, x, i) => a + x * formBandWeights()[i], 0) : null);
+
+// Simulations run in background workers so the page stays responsive; inline if workers are unavailable.
+const Pool = (() => {
+  let workers = null, idle = [], next = 1;
+  const queue = [], pending = new Map();
+  const glue = `
+self.onmessage = (e) => {
+  const { id, kind, job } = e.data;
+  try {
+    let r;
+    if (kind === "baseline") r = { area: Growth.panelBaseline(job) };
+    else { r = Growth.evaluate(job); const f = new Float32Array(r.prims.length * 7); r.prims.forEach((p, i) => f.set([p.a[0], p.a[1], p.a[2], p.b[0], p.b[1], p.b[2], p.r], i * 7)); r.prims = f; }
+    postMessage({ id, r });
+  } catch (err) { postMessage({ id, error: String((err && err.message) || err) }); }
+};`;
+  function init() {
+    if (workers) return;
+    workers = [];
+    try {
+      const url = URL.createObjectURL(new Blob([$("#growth-src").textContent, glue], { type: "text/javascript" }));
+      const n = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+      for (let i = 0; i < n; i++) {
+        const w = new Worker(url);
+        w.onmessage = (e) => {
+          const task = pending.get(e.data.id);
+          pending.delete(e.data.id); w.job = null; idle.push(w);
+          if (task) e.data.error ? task.reject(new Error(e.data.error)) : task.resolve(e.data.r);
+          pump();
+        };
+        w.onerror = (ev) => {
+          ev.preventDefault();
+          workers = workers.filter((x) => x !== w); idle = idle.filter((x) => x !== w);
+          if (w.job) { pending.delete(w.job.id); queue.unshift(w.job); w.job = null; }
+          pump();
+        };
+        workers.push(w); idle.push(w);
+      }
+    } catch (e) { workers = []; }
+  }
+  function inline(task) {
+    setTimeout(() => {
+      try {
+        let r;
+        if (task.kind === "baseline") r = { area: G.panelBaseline(task.job) };
+        else { r = G.evaluate(task.job); r.prims = flatPrims(r.prims); }
+        task.resolve(r);
+      } catch (err) { task.reject(err); }
+    }, 0);
+  }
+  function pump() {
+    while (queue.length) {
+      if (!workers.length) { inline(queue.shift()); continue; }
+      const w = idle.shift();
+      if (!w) return;
+      const task = queue.shift();
+      w.job = task; pending.set(task.id, task);
+      w.postMessage({ id: task.id, kind: task.kind, job: task.job });
+    }
+  }
+  return { run(kind, job) { init(); return new Promise((resolve, reject) => { queue.push({ id: next++, kind, job, resolve, reject }); pump(); }); } };
+})();
+
+async function growForms() {
+  if (state.fGrowing) return;
+  if (!state.porous.size) { addMsg("note", "Pick at least one soft material in the Materials workspace first."); return; }
+  state.fGrowing = true; state.fProgress = 0;
+  renderOptbar(); renderStatus();
+  const rules = state.fRule === "all" ? RULE_KEYS : [state.fRule];
+  const P = rules.length > 1 ? 10 : 14, GENS = rules.length > 1 ? 5 : 9, total = rules.length * (GENS + 1);
+  const mats = [...state.porous], weights = formBandWeights(), rand = G.rng(97 + state.fSeed++ * 7919), made = [];
+  let steps = 0;
+  try {
+    for (const rule of rules) {
+      const n = G.geneCount(rule);
+      let pop = Array.from({ length: P }, () => Array.from({ length: n }, rand)), best = null;
+      for (let gen = 0; gen <= GENS; gen++) {
+        const res = await Promise.all(pop.map((genes) => {
+          const material = mats[Math.min(mats.length - 1, Math.floor(genes[n - 1] * mats.length))], m = E.FELTS[material];
+          return Pool.run("evaluate", { rule, genes, mount: state.fMount, size: state.fSize, material: { sigma: m.sigma, density: m.density }, budget: state.fBudget, weights })
+            .then((r) => ({ ...r, material }));
+        }));
+        for (const r of res) if (!best || r.fitness > best.fitness) best = r;
+        state.fLive = best; state.fProgress = ++steps / total;
+        if (state.ws === "forms") { renderFormsCanvas(); renderStatus(); }
+        if (gen < GENS) pop = G.nextGeneration(pop, res.map((r) => r.fitness), rand);
+      }
+      made.push(addForm(best));
+    }
+  } catch (err) {
+    addMsg("note", "The simulation stopped: " + err.message);
+  } finally {
+    state.fGrowing = false; state.fLive = null;
+  }
+  if (made.length) {
+    const top = made.sort((a, b) => b.fitness - a.fitness)[0];
+    state.formSel = top.id;
+    addMsg("note", `Grown. ${made.length > 1 ? `Best rule: ${top.name}` : top.name}: ${fix(top.score, 2)} m² of absorption per piece. Watch the sound under the 3D view.`);
+  }
+  renderAll();
+}
+function addForm(r) {
+  const same = state.forms.filter((f) => f.rule === r.rule).length;
+  const f = { ...r, id: state.fNext++, name: `${G.RULES[r.rule].name} ${same + 1}`, baseline: null };
+  state.forms.push(f);
+  Pool.run("baseline", { material: { sigma: E.FELTS[f.material].sigma, density: E.FELTS[f.material].density }, mass: f.mass })
+    .then((b) => { f.baseline = b.area; if (state.ws === "forms" && !state.fGrowing) { renderFormsCanvas(); renderDock(); } })
+    .catch(() => {});
+  return f;
+}
+
+function renderFormsBar(ob) {
+  ob.innerHTML = `<div class="opt" id="opt-mount"><span class="muted">Lives</span><div class="segd" role="group" aria-label="Where the form lives">
+      <button data-mount="hanging" aria-pressed="${state.fMount === "hanging"}">Hanging</button><button data-mount="standing" aria-pressed="${state.fMount === "standing"}">Standing</button></div></div>
+    <span class="divider"></span>
+    <div class="opt" id="opt-form-size"><label for="f-size">Size</label><input type="range" id="f-size" min="0.4" max="2" step="0.1" value="${state.fSize}"><output id="f-size-out">${fix(state.fSize, 1)} m</output>
+      <label for="f-budget">Material per piece</label><input type="range" id="f-budget" min="0.5" max="15" step="0.5" value="${state.fBudget}"><output id="f-budget-out">${state.fBudget} kg</output></div>
+    <span class="spacer"></span>
+    <button class="btn primary" id="btn-grow-forms" ${state.fGrowing ? "disabled" : ""}>${state.fGrowing ? "Growing…" : state.fRule === "all" ? "Grow all five rules" : "Grow " + G.RULES[state.fRule].name.toLowerCase()}</button>`;
+  $$("[data-mount]").forEach((b) => b.onclick = () => { state.fMount = b.dataset.mount; renderFormsBar(ob); renderFormsCanvas(); });
+  $("#f-size").oninput = (e) => { state.fSize = Number(e.target.value); $("#f-size-out").textContent = fix(state.fSize, 1) + " m"; };
+  $("#f-budget").oninput = (e) => { state.fBudget = Number(e.target.value); $("#f-budget-out").textContent = state.fBudget + " kg"; };
+  $("#btn-grow-forms").onclick = growForms;
+}
+
+function formBars(f) {
+  const w = 460, h = 180, L = 40, B = 28, T = 10, base = f.baseline || [0, 0, 0], max = Math.max(0.1, ...f.area, ...base) * 1.15;
+  const y = (v) => T + (1 - v / max) * (h - T - B), gw = (w - L - 10) / 3;
+  let s = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Absorption of the form and of a flat panel with the same material">`;
+  for (let v = 0; v <= max; v += max > 2 ? 1 : max > 1 ? 0.5 : 0.25) s += `<line x1="${L}" x2="${w - 10}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)" font-family="var(--mono)">${v.toFixed(v < 1 && max <= 1 ? 2 : 1)}</text>`;
+  G.BANDS.forEach((band, i) => {
+    const x = L + gw * i;
+    s += `<rect x="${x + gw * 0.15}" y="${y(f.area[i])}" width="${gw * 0.32}" height="${h - B - y(f.area[i])}" fill="var(--accent)"/>`;
+    if (f.baseline) s += `<rect x="${x + gw * 0.53}" y="${y(base[i])}" width="${gw * 0.32}" height="${h - B - y(base[i])}" fill="#6a6e76"/>`;
+    s += `<text x="${x + gw / 2}" y="${h - 10}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--mono)">${hz(band)}</text>`;
+  });
+  return s + "</svg>";
+}
+
+function renderFormsCanvas() {
+  const c = $("#canvas"), f = state.fLive || selForm(), growing = !!state.fLive;
+  if (!f) {
+    FormView.detach(); FormWave.stop();
+    c.innerHTML = `<div class="artboard"><div class="card-head"><h2>Grow forms in space</h2><span class="muted">Not panels: free objects, the way nature would answer</span></div>
+      <p>Pick a growth rule in the toolbar (or all five), choose <strong>Hanging</strong> or <strong>Standing</strong>, set the size and how much material one piece may use, then press <strong>Grow</strong>.
+      Every candidate is tested by sending sound waves through a room with the form in it. Evolution keeps the forms that make the sound die away fastest.</p>
+      <div class="art-grid">${RULE_KEYS.map((k) => `<button class="art-card" data-rule-pick="${k}"><div class="row"><strong>${G.RULES[k].name}</strong><span class="pill">${icon(k)}</span></div>
+        <span class="muted">Imitates ${G.RULES[k].imitates}</span><span>${G.RULES[k].idea}</span></button>`).join("")}</div></div>`;
+    return;
+  }
+  const mat = E.FELTS[f.material], bs = baselineScore(f), ratio = bs ? f.score / bs : null;
+  c.innerHTML = `<div class="card"><div class="card-head"><h3>${growing ? `Growing: ${G.RULES[f.rule].name} (best so far)` : esc(f.name)}</h3>
+      <span class="hint">${f.mount === "hanging" ? "Hanging from the ceiling" : "Standing on the floor"} · fits in ${fix(f.size, 1)} m${f.mount === "standing" ? " × " + fix(G.envelope(f.size, "standing").height, 1) + " m high" : ""} · ${f.prims.length / 7} parts</span></div>
+      <div id="fv-slot"></div>
+      <div class="row3d"><span class="muted">${esc(G.RULES[f.rule].describe(f.genes))}</span><span class="swatches"><span><i style="background:${hex(SOFT_COLORS[f.material])}"></i>${esc(mat.name)}</span></span></div></div>
+    <div class="kpis">
+      ${G.BANDS.map((b, i) => `<div class="kpi"><span class="kicker">Absorption at ${hz(b)}</span><b>${fix(f.area[i], 2)} m²</b><span class="hint">per piece (Sabine)</span></div>`).join("")}
+      <div class="kpi"><span class="kicker">Material</span><b>${fix(f.mass, 1)} kg</b><span class="hint">${fix(f.perKg, 2)} m² per kg${f.mass > state.fBudget ? " · over budget" : ""}</span></div>
+      <div class="kpi"><span class="kicker">Versus a flat panel</span><b>${ratio ? fix(ratio, 1) + "×" : "…"}</b><span class="hint">same material and kg, 50 mm on a wall</span></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>The form against a flat panel of the same material</h3>
+      <div class="legend"><span><i class="box" style="background:var(--accent)"></i>this form</span><span><i class="box" style="background:#6a6e76"></i>flat 50 mm panel, same kg</span></div></div>
+      <div class="chart-scroll">${formBars(f)}</div>
+      <p class="hint">Both go through the same wave simulator. The simulator reads about 25% below textbook values for every object alike, so comparisons hold.</p></div>
+    ${growing ? "" : `<div class="card" id="wave-card"><div class="card-head"><h3>Watch the sound</h3>
+        <div class="chips">${G.BANDS.map((b) => `<button class="chip" data-band="${b}" aria-pressed="${state.fBand === b}">${hz(b)}</button>`).join("")}<button class="chip" id="wave-replay">Replay</button></div></div>
+      <p class="hint">A slice through a 6 m room. A burst of sound starts in the bottom-left corner (orange and blue are high and low pressure). Green is the form. On the right: how fast the sound dies away. In an empty room it would keep ringing.</p>
+      <div class="wave-wrap"><canvas id="wave-canvas" aria-label="Sound waves in the room"></canvas><svg id="wave-energy" viewBox="0 0 300 140" role="img" aria-label="Sound energy over time"></svg></div></div>`}`;
+  FormView.show($("#fv-slot"), f);
+  if (!growing) {
+    FormWave.start(f, state.fBand);
+    $$("[data-band]").forEach((b) => b.onclick = () => { state.fBand = Number(b.dataset.band); renderFormsCanvas(); });
+    $("#wave-replay").onclick = () => FormWave.replay(f, state.fBand);
+  }
+}
+$("#canvas").addEventListener("click", (e) => { const b = e.target.closest("[data-rule-pick]"); if (b) { state.fRule = b.dataset.rulePick; renderTools(); renderOptbar(); renderDock(); } });
+
+function formsPropsPanel() {
+  const f = selForm();
+  if (!f) {
+    const r = state.fRule === "all" ? null : G.RULES[state.fRule];
+    return `<details class="panel" open id="panel-props"><summary>Properties</summary><div class="panel-body">
+      ${r ? `<h4>${r.name}</h4><p class="hint">Imitates ${r.imitates}.</p><p>${r.idea}</p>` : "<h4>All five growth rules</h4><p>Each rule evolves on its own, then you compare the winners.</p>"}
+      <p class="hint">Soft materials allowed: ${state.porous.size} (change them in the Materials workspace).</p></div></details>`;
+  }
+  const bs = baselineScore(f);
+  return `<details class="panel" open id="panel-props"><summary>Properties</summary><div class="panel-body">
+    <h4>${esc(f.name)}</h4><p class="hint">Imitates ${G.RULES[f.rule].imitates}.</p><p>${G.RULES[f.rule].idea}</p>
+    <ul class="plain"><li>${esc(G.RULES[f.rule].describe(f.genes))}</li><li>Made of ${esc(E.FELTS[f.material].name.toLowerCase())}, ${fix(f.mass, 1)} kg.</li></ul>
+    <dl class="facts"><dt>Lives</dt><dd>${f.mount}</dd><dt>Envelope</dt><dd>${fix(f.size, 1)} m</dd><dt>Absorbs</dt><dd>${f.area.map((a) => fix(a, 2)).join(" / ")} m²</dd>
+      <dt>Per kg</dt><dd>${fix(f.perKg, 2)} m²</dd><dt>vs panel</dt><dd>${bs ? fix(f.score / bs, 1) + "×" : "measuring…"}</dd></dl>
+    <div class="chips"><button class="chip" data-ask="Explain the ${esc(f.name)} form in simple words: why does it absorb sound this well or badly, and what would nature change?">Ask the guide</button>
+      <button class="chip" id="form-obj" ${downloads ? "" : "hidden"}>Export 3D (OBJ)</button><button class="chip" id="form-to-space">Use in Spaces</button></div></div></details>`;
+}
+function formsLayersPanel() {
+  const list = state.forms.slice().sort((a, b) => b.fitness - a.fitness);
+  return `<details class="panel" open id="panel-forms"><summary>Grown forms</summary><div class="panel-body">
+    ${list.map((f) => `<button class="layer" data-form-pick="${f.id}" aria-pressed="${state.formSel === f.id}">
+      <span class="thumb rule-thumb">${icon(f.rule)}</span><span><strong>${esc(f.name)}</strong><small>${f.mount} · ${fix(f.mass, 1)} kg · ${esc(E.FELTS[f.material].name)}</small></span>
+      <span class="mono">${fix(f.score, 2)} m²</span></button>`).join("") || '<p class="hint">Nothing grown yet. Press Grow in the options bar.</p>'}</div></details>`;
+}
+function bindFormsDock() {
+  $$("[data-form-pick]").forEach((b) => b.onclick = () => { state.formSel = Number(b.dataset.formPick); renderFormsCanvas(); renderDock(); });
+  const f = selForm();
+  if (!f) return;
+  if ($("#form-obj")) $("#form-obj").onclick = (e) => saveFile(`biothing-${f.rule}-${f.id}.obj`, formOBJ(f), e.target);
+  $("#form-to-space").onclick = () => { const sp = curSpace(); if (sp) addPlacement(sp, "form:" + f.id); setWorkspace("spaces"); };
+}
+
+// A light OBJ: 8-sided tubes for branches, low-poly balls for spheres and joints. Metres, z up.
+function formOBJ(f) {
+  const v = [], faces = [];
+  const tube = (a, b, r) => {
+    const d = norm3(sub3(b, a)), u = Math.abs(d[2]) < 0.9 ? norm3(cross3(d, [0, 0, 1])) : norm3(cross3(d, [1, 0, 0])), w = cross3(d, u), base = v.length + 1;
+    for (const c of [a, b]) for (let k = 0; k < 8; k++) { const t = (k / 8) * 2 * Math.PI; v.push(add3(c, add3(mul3(u, r * Math.cos(t)), mul3(w, r * Math.sin(t))))); }
+    for (let k = 0; k < 8; k++) { const k2 = (k + 1) % 8; faces.push([base + k, base + k2, base + 8 + k2, base + 8 + k]); }
+    faces.push([...Array(8).keys()].map((k) => base + 7 - k)); faces.push([...Array(8).keys()].map((k) => base + 8 + k));
+  };
+  const ball = (c, r) => {
+    const base = v.length + 1, n = 8, m = 6;
+    for (let i = 0; i <= m; i++) for (let j = 0; j < n; j++) {
+      const th = (i / m) * Math.PI, ph = (j / n) * 2 * Math.PI;
+      v.push([c[0] + r * Math.sin(th) * Math.cos(ph), c[1] + r * Math.sin(th) * Math.sin(ph), c[2] + r * Math.cos(th)]);
+    }
+    for (let i = 0; i < m; i++) for (let j = 0; j < n; j++) { const j2 = (j + 1) % n; faces.push([base + i * n + j, base + (i + 1) * n + j, base + (i + 1) * n + j2, base + i * n + j2]); }
+  };
+  for (const p of primsOf(f.prims)) {
+    if (Math.hypot(...sub3(p.b, p.a)) < 1e-6) ball(p.a, p.r); else { tube(p.a, p.b, p.r); if (p.r > 0.012) ball(p.b, p.r); }
+  }
+  return `# Biothing Sound Lab: ${f.name} (${G.RULES[f.rule].name}), ${f.mount}, metres, z up\n# material: ${E.FELTS[f.material].name}, ${fix(f.mass, 2)} kg\n`
+    + v.map((p) => `v ${p[0].toFixed(4)} ${p[1].toFixed(4)} ${p[2].toFixed(4)}`).join("\n") + "\n" + faces.map((q) => "f " + q.join(" ")).join("\n") + "\n";
+}
+const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], add3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]], mul3 = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm3 = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+
+// Instanced tubes and balls for a form, optionally repeated at several positions (Spaces).
+function formInstances(f, positions, parent) {
+  const prims = primsOf(f.prims), tubes = [], balls = [];
+  for (const p of prims) {
+    if (Math.hypot(...sub3(p.b, p.a)) < 1e-6) balls.push(p); else { tubes.push(p); if (p.r > 0.012) balls.push({ a: p.b, b: p.b, r: p.r }); }
+  }
+  const m = new T3.MeshStandardMaterial({ color: SOFT_COLORS[f.material], roughness: 0.95 }), o = new T3.Object3D(), up = new T3.Vector3(0, 1, 0);
+  if (tubes.length) {
+    const inst = new T3.InstancedMesh(new T3.CylinderGeometry(1, 1, 1, 8), m, tubes.length * positions.length);
+    let i = 0;
+    for (const off of positions) for (const p of tubes) {
+      const a = new T3.Vector3(p.a[0] + off[0], p.a[1] + off[1], p.a[2] + off[2]), b = new T3.Vector3(p.b[0] + off[0], p.b[1] + off[1], p.b[2] + off[2]), d = b.clone().sub(a), L = d.length();
+      o.position.copy(a).add(b).multiplyScalar(0.5); o.quaternion.setFromUnitVectors(up, d.normalize()); o.scale.set(p.r, L, p.r); o.updateMatrix(); inst.setMatrixAt(i++, o.matrix);
+    }
+    parent.add(inst);
+  }
+  if (balls.length) {
+    const inst = new T3.InstancedMesh(new T3.SphereGeometry(1, 14, 10), m, balls.length * positions.length);
+    let i = 0;
+    o.quaternion.identity();
+    for (const off of positions) for (const p of balls) { o.position.set(p.a[0] + off[0], p.a[1] + off[1], p.a[2] + off[2]); o.scale.set(p.r, p.r, p.r); o.updateMatrix(); inst.setMatrixAt(i++, o.matrix); }
+    parent.add(inst);
+  }
+}
+
+// 3D view of one form with its ceiling or floor, and a person for scale when it stands.
+const FormView = (() => {
+  let v = null, shown = null;
+  function build(f) {
+    v.clear();
+    formInstances(f, [[0, 0, 0]], v.root);
+    const S = f.size, H = G.envelope(S, f.mount).height, grey = new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1 });
+    const slab = new T3.Mesh(new T3.BoxGeometry(S * 1.6, S * 1.6, 0.02), f.mount === "hanging" ? new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1, transparent: true, opacity: 0.55 }) : grey);
+    slab.position.set(0, 0, f.mount === "hanging" ? 0.01 : -0.01);
+    v.root.add(slab);
+    if (f.mount === "standing") {
+      const body = new T3.MeshStandardMaterial({ color: 0x8d9198, roughness: 1 }), x = S / 2 + 0.45;
+      const part = (geo, z) => { const m = new T3.Mesh(geo, body); m.rotation.x = Math.PI / 2; m.position.set(x, 0, z); v.root.add(m); };
+      part(new T3.CylinderGeometry(0.11, 0.09, 0.85, 12), 0.43);
+      part(new T3.CylinderGeometry(0.16, 0.12, 0.65, 12), 1.18);
+      const head = new T3.Mesh(new T3.SphereGeometry(0.11, 16, 12), body); head.position.set(x, 0, 1.62); v.root.add(head);
+    }
+    const midZ = f.mount === "hanging" ? -H / 2 : H / 2;
+    Object.assign(v.orbit, { target: [f.mount === "standing" ? 0.25 : 0, 0, midZ], dist: Math.max(S, H) * 2.4, theta: -0.9, phi: f.mount === "hanging" ? 1.85 : 1.2 });
+  }
+  return {
+    show(slot, f) {
+      if (!v) v = makeViewer({ up: "z", cls: "viewport shape-view" });
+      slot.replaceWith(v.el);
+      if (!v.ok) return;
+      const sig = f.id + ":" + f.fitness + ":" + f.prims.length;
+      if (shown !== sig) { shown = sig; build(f); }
+      v.draw();
+    },
+    detach() { if (v && v.el.isConnected) v.el.remove(); },
+  };
+})();
+
+// Live wave animation: the same solver as the evaluation, on the slice through the middle of the form.
+const FormWave = (() => {
+  let sim = null, sig = "", raf = 0, cv = null, svg = null, ctx = null, img = null, peak = 0, curve = [], e0 = 0, tEnd = 0, room = null;
+  function setup(f, band) {
+    sig = f.id + ":" + band;
+    const vox = G.voxelize(primsOf(f.prims), 343.2 / band / 6);
+    room = G.roomFor(f.mount);
+    sim = G.makeSim(G.slice(vox, 0, 0.5), E.FELTS[f.material].sigma, band, room, f.mount);
+    peak = 0; curve = []; e0 = 0; tEnd = sim.burstEnd + 0.2;
+  }
+  function draw() {
+    const { nx, nz, p, s } = sim, d = img.data;
+    let frameMax = 0;
+    for (let i = 0; i < p.length; i++) frameMax = Math.max(frameMax, Math.abs(p[i]));
+    peak = Math.max(peak, frameMax, 1e-9); // fixed to the loudest moment, so the fading shows
+    for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+      const src = i + nx * k, dst = 4 * (i + nx * (nz - 1 - k)), val = p[src] / peak, a = Math.min(1, Math.sqrt(Math.abs(val)));
+      let r = 16, g = 17, b = 20;
+      if (val > 0) { r += (230 - r) * a; g += (162 - g) * a; b += (60 - b) * a; } else { r += (74 - r) * a; g += (144 - g) * a; b += (226 - b) * a; }
+      const m = s[src] * 0.8;
+      if (m > 0) { r += (91 - r) * m; g += (182 - g) * m; b += (124 - b) * m; }
+      d[dst] = r; d[dst + 1] = g; d[dst + 2] = b; d[dst + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  function drawCurve() {
+    if (!svg) return;
+    const t0 = sim.burstEnd, X = (t) => 30 + ((t - t0) / (tEnd - t0)) * 262, Y = (db) => 10 + (-db / 30) * 110;
+    let s = `<rect x="0" y="0" width="300" height="140" fill="var(--app)"/>`;
+    for (const db of [0, -10, -20, -30]) s += `<line x1="30" x2="292" y1="${Y(db)}" y2="${Y(db)}" stroke="var(--line)"/><text x="26" y="${Y(db) + 4}" text-anchor="end" font-size="9" fill="var(--muted)" font-family="var(--mono)">${db}</text>`;
+    s += `<line x1="30" x2="292" y1="${Y(0)}" y2="${Y(0)}" stroke="#8a8e96" stroke-dasharray="4 3"/><text x="290" y="${Y(0) - 4}" text-anchor="end" font-size="9" fill="var(--muted)" font-family="var(--sans)">empty room keeps ringing</text>`;
+    if (curve.length > 1) s += `<polyline points="${curve.map(([t, db]) => `${X(t).toFixed(1)},${Y(Math.max(-30, db)).toFixed(1)}`).join(" ")}" fill="none" stroke="var(--good)" stroke-width="2"/>`;
+    s += `<text x="161" y="136" text-anchor="middle" font-size="9" fill="var(--muted)" font-family="var(--sans)">time → (dB below the start)</text>`;
+    svg.innerHTML = s;
+  }
+  function loop() {
+    if (!cv || !cv.isConnected || !sim) return;
+    if (sim.t < tEnd) {
+      sim.step(Math.max(1, Math.round(tEnd / sim.dt / 420)));
+      if (sim.t > sim.burstEnd) {
+        const e = sim.energy();
+        if (!e0) e0 = e;
+        curve.push([sim.t, 10 * Math.log10(Math.max(e / e0, 1e-9))]);
+      }
+    }
+    draw(); drawCurve();
+    if (sim.t < tEnd) raf = requestAnimationFrame(loop);
+  }
+  function bind() {
+    cv = $("#wave-canvas"); svg = $("#wave-energy");
+    if (!cv || !sim) return false;
+    cv.width = sim.nx; cv.height = sim.nz; ctx = cv.getContext("2d"); img = ctx.createImageData(sim.nx, sim.nz);
+    return true;
+  }
+  return {
+    start(f, band) {
+      if (f.id + ":" + band !== sig || !sim) setup(f, band);
+      cancelAnimationFrame(raf);
+      if (bind()) loop();
+    },
+    replay(f, band) { setup(f, band); cancelAnimationFrame(raf); if (bind()) loop(); },
+    stop() { cancelAnimationFrame(raf); },
+  };
+})();
+
 // ------------------------------------------------------------- status bar --
 function renderStatus() {
   const s = $("#status");
+  if (state.ws === "forms") {
+    s.innerHTML = `${state.fGrowing ? `<span>Growing and testing</span><span class="progress"><i style="width:${state.fProgress * 100}%"></i></span>` : `<span>${state.forms.length} forms grown</span>`}
+      <span>${state.fMount}</span><span class="mono">${fix(state.fSize, 1)} m · ${state.fBudget} kg</span><span>Wave simulator: 2D slices at 250, 500 and 1000 Hz</span>`;
+    return;
+  }
   if (state.ws === "spaces") {
     const sp = curSpace();
     s.innerHTML = sp ? `<span>${esc(sp.name)}</span><span class="mono">${fix(spaceVolume(sp), 0)} m³</span><span>Model: statistical (Sabine) reverberation, for comparing options</span>` : "<span>No space selected</span>";
@@ -1179,6 +1610,8 @@ function renderStatus() {
 const TIPS = {
   shapes: { text: "Set what to quiet, the <strong>depth</strong> and the <strong>material budget</strong> in the bar above, then press <strong>Grow shapes</strong>. Pick any shape to inspect it.",
     chips: ["Why did this shape win?", "How deep should it be?", "How would I make it?"] },
+  forms: { text: "Pick a <strong>growth rule</strong> in the toolbar, choose <strong>Hanging</strong> or <strong>Standing</strong>, then press <strong>Grow</strong>. Each candidate is tested with real sound waves.",
+    chips: ["Which form works best?", "Why does thickness matter?", "How would I make this form?"] },
   materials: { text: "Tick the materials you like. The chart shows each one as a plain flat layer, so you see the material before any shaping.",
     chips: ["Which material is best for me?", "Explain the chart", "Which are the most natural?"] },
   spaces: { text: "Add your exhibition areas (or import a 3D model), set the finishes and visitors, then place grown shapes. Aim for the <strong>recommended</strong> echo.",
@@ -1191,7 +1624,7 @@ function renderGuideTip() {
 }
 document.addEventListener("click", (e) => { const c = e.target.closest("[data-ask]"); if (c) ask(c.dataset.ask); });
 
-const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing), compares materials, and tests the shapes in 3D models of exhibition spaces. The person is a designer, not an acoustic engineer.
+const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing): panel-like shapes in the Shapes workspace, and free hanging or standing objects in the Forms workspace (grown by rules like branching trees, snow crystals, folding coral, spiral shells and foam, each tested in a 2D wave simulator that reads about 25% conservative). It also compares materials, and tests everything in 3D models of exhibition spaces. The person is a designer, not an acoustic engineer.
 How to answer:
 - Simple, everyday words; explain any technical word in a few words the first time.
 - Short: at most about 120 words unless asked for more. Short paragraphs or a few bullets.
@@ -1206,10 +1639,12 @@ function pageState() {
     state.results ? "Shapes (grown):" : "Shapes (seeds, not grown yet):"];
   for (const f of families()) { const r = current(f.key); if (r) lines.push(`- ${f.name}: ${scoreText(r)}; ${explain(r).join(" ")}`); }
   if (state.ws === "shapes" && state.tool !== "all") lines.push(`Inspecting: ${E.FAMILY[state.tool].name}`);
+  lines.push(`Forms settings: ${state.fMount}, size ${state.fSize} m, material per piece ${state.fBudget} kg, rule ${state.fRule}`);
+  for (const f of state.forms) lines.push(`- Form "${f.name}"${f.id === state.formSel ? " (selected)" : ""}: ${f.mount}, ${G.RULES[f.rule].describe(f.genes)} ${E.FELTS[f.material].name}, ${fix(f.mass, 1)} kg; absorption ${f.area.map((a) => fix(a, 2)).join("/")} m2 at 250/500/1000 Hz; ${fix(f.perKg, 2)} m2 per kg${f.baseline ? `; flat panel with the same kg: ${f.baseline.map((a) => fix(a, 2)).join("/")} m2` : ""}`);
   if (state.ranking) lines.push(`Material ranking for ${E.FAMILY[state.ranking.family].name}: ${state.ranking.rows.map((r) => `${E.FELTS[r.params.porous].name} ${pct(r.score)}`).join(", ")}`);
   for (const s of state.spaces) {
     const { res } = spaceCalc(s);
-    lines.push(`Space "${s.name}"${s.id === state.spaceId ? " (selected)" : ""}: ${fix(spaceVolume(s), 0)} m3, floor ${R.SURFACES[s.finishes.floor].name}, walls ${R.SURFACES[s.finishes.wall].name}, ceiling ${R.SURFACES[s.finishes.ceiling].name}, ${s.people} visitors; reverberation 500-1000 Hz now ${fix(res.speechRtBefore, 2)} s, with absorbers ${fix(res.speechRtAfter, 2)} s, recommended ${fix(res.target, 2)} s; absorbers: ${s.placements.map((p) => `${p.area} m2 ${E.FAMILY[p.family].name}`).join(", ") || "none"}; crowd noise drop ${fix(Math.max(0, res.noiseDrop), 1)} dB`);
+    lines.push(`Space "${s.name}"${s.id === state.spaceId ? " (selected)" : ""}: ${fix(spaceVolume(s), 0)} m3, floor ${R.SURFACES[s.finishes.floor].name}, walls ${R.SURFACES[s.finishes.wall].name}, ceiling ${R.SURFACES[s.finishes.ceiling].name}, ${s.people} visitors; reverberation 500-1000 Hz now ${fix(res.speechRtBefore, 2)} s, with absorbers ${fix(res.speechRtAfter, 2)} s, recommended ${fix(res.target, 2)} s; absorbers: ${s.placements.map((p) => `${p.area} ${isForm(p.family) ? "pieces" : "m2"} ${plName(p.family)}`).join(", ") || "none"}; crowd noise drop ${fix(Math.max(0, res.noiseDrop), 1)} dB`);
   }
   return lines.join("\n");
 }
@@ -1251,16 +1686,18 @@ $("#ask-stop").addEventListener("click", () => ctl && ctl.abort());
 
 // ------------------------------------------------------------------- tour --
 const TOUR = [
-  { ws: "shapes", sel: "#ws-tabs", title: "Three workspaces", text: "Shapes grows absorbers, Materials compares materials, Spaces tests them in 3D models of your exhibition areas. Like the workspaces in a design app." },
+  { ws: "shapes", sel: "#ws-tabs", title: "Four workspaces", text: "Shapes grows panel-like absorbers, Forms grows free objects the way nature would, Materials compares materials, Spaces tests everything in 3D models of your exhibition areas." },
   { ws: "shapes", sel: "#opt-target", title: "1. What to quiet", text: "Choose the noise you care about. Exhibition mix balances voices and crowd." },
   { ws: "shapes", sel: "#opt-space", title: "2. Depth and material", text: "Depth decides which pitches can be caught: low pitches need depth. The material budget limits how much each shape may use." },
   { ws: "shapes", sel: "#btn-grow", title: "3. Grow", text: "Every nature-inspired family evolves under the same limits: many variations, keep the best, mix, repeat." },
   { ws: "shapes", sel: "#tools", title: "4. Tools = shape families", text: "Each tool is one family: spikes, sponge, cloud, bottles, coils, moss-on-shell. Click one to inspect it on the artboard." },
   { ws: "shapes", sel: "#panel-layers", title: "5. Layers", text: "The grown shapes, ranked. Click any to open it; Properties explains it in plain words." },
-  { ws: "materials", sel: "#panel-materials", title: "6. Materials", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
-  { ws: "spaces", sel: "#panel-spaces", title: "7. Your spaces", text: "Each exhibition area is its own 3D model. Add a ready-made room, or import an OBJ from Rhino, SketchUp or Blender." },
-  { ws: "spaces", sel: "#panel-absorbers", title: "8. Place absorbers", text: "Add grown shapes to the space. The lab tells you how many m² reach the recommended echo, and how much the crowd noise drops." },
-  { ws: "spaces", sel: "#panel-guide", title: "9. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
+  { ws: "forms", sel: "#tools", title: "6. Forms: growth rules", text: "Not panels: free objects. Each tool is a rule from nature: branching tree, snow crystal, folding coral, spiral shell, foam." },
+  { ws: "forms", sel: "#opt-mount", title: "7. Hanging or standing", text: "Choose where the object lives, its size and how much material one piece may use. Then press Grow: every candidate is tested with sound waves." },
+  { ws: "materials", sel: "#panel-materials", title: "8. Materials", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
+  { ws: "spaces", sel: "#panel-spaces", title: "9. Your spaces", text: "Each exhibition area is its own 3D model. Add a ready-made room, or import an OBJ from Rhino, SketchUp or Blender." },
+  { ws: "spaces", sel: "#panel-absorbers", title: "10. Place absorbers", text: "Add grown shapes to the space. The lab tells you how many m² reach the recommended echo, and how much the crowd noise drops." },
+  { ws: "spaces", sel: "#panel-guide", title: "11. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
 ];
 let tourAt = -1;
 function tour(i) {

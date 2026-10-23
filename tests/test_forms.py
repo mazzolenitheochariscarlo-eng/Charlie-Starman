@@ -52,5 +52,5 @@ def test_deeper_absorbs_more_at_low_pitch():
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 def test_web_engines_match_python():
     subprocess.run(["python3", "webapp/make_reference.py"], cwd=ROOT, check=True, env={"PYTHONPATH": str(ROOT), "PATH": "/usr/bin:/bin"})
-    for test in ("webapp/engine.test.js", "webapp/rooms.test.js"):
+    for test in ("webapp/engine.test.js", "webapp/rooms.test.js", "webapp/growth.test.js"):
         subprocess.run(["node", test], cwd=ROOT, check=True)

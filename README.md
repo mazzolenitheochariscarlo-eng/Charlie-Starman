@@ -28,6 +28,13 @@ one-person module mass, flat-pack transport and reuse across many events.
   material budget. Inspect each one as a cross-section with its absorption curve.
 - **Materials**: 14 soft materials (plant, animal, fungus, recycled, mineral) and 5 hard
   ones, compared as plain flat layers, plus "try every material on this shape".
+- **Forms**: not panels but free objects, hanging or standing, grown by five rules from nature
+  (branching tree and coral, snow crystal, folding coral, spiral shell, foam cloud). Every
+  candidate is voxelised and tested in a 2D finite-difference wave simulator (slices of a room
+  at 250, 500 and 1000 Hz; felt modelled as a parallel air/porous path). Evolution keeps the
+  forms that make sound die away fastest within a material budget per piece. Results show in
+  3D, as a live wave animation, against a flat panel of the same material and mass, and export
+  as OBJ. Checked against theory for a hanging felt layer, the simulator reads about 25% low.
 - **Spaces**: exhibition areas as 3D models (ready-made rooms, or your own `.obj` exports).
   Set the finishes and visitor count, place grown shapes, and compare reverberation time
   with the recommended value and the drop in crowd noise.
@@ -38,6 +45,7 @@ A guided tour and a live guide panel (Claude, when opened on claude.ai) explain 
 python3 webapp/build.py          # -> webapp/dist/biothing-sound-lab.html (one self-contained file)
 node webapp/engine.test.js       # browser engine matches the Python models
 node webapp/rooms.test.js        # room acoustics checks
+node webapp/growth.test.js       # growth rules, voxels and wave solver
 ```
 
 `webapp/engine.js` is a line-for-line port of `biothing_acoustics/layers.py` and `forms.py`;
