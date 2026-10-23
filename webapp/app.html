@@ -98,6 +98,14 @@ tr.current td { background: var(--panel-2); }
 .status-pill.bad { background: rgba(228, 107, 95, 0.18); color: var(--bad); }
 .viewport { position: relative; height: min(56vh, 520px); min-height: 300px; background: #0f1012; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; touch-action: none; }
 .viewport canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+.shape-view { height: min(52vh, 480px); min-height: 280px; }
+.seg { display: inline-flex; border: 1px solid #c9cacd; border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; background: #fff; color: #44474d; padding: 4px 12px; cursor: pointer; font-weight: 600; font-size: 13px; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.row3d { display: flex; justify-content: space-between; gap: 6px 14px; flex-wrap: wrap; font-size: 13px; }
+.swatches { display: inline-flex; gap: 12px; flex-wrap: wrap; color: #44474d; }
+.swatches span { display: inline-flex; align-items: center; gap: 6px; }
+.swatches i { width: 12px; height: 12px; border-radius: 3px; border: 1px solid #b9babd; display: inline-block; }
 .viewport .hud { position: absolute; left: 10px; top: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
 .viewport .fallback { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; text-align: center; color: var(--muted); }
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
@@ -253,7 +261,7 @@ const state = {
   ws: "shapes", tool: "all", target: "exhibition", depth: 100, mass: 3, hang: true,
   porous: new Set(Object.keys(E.FELTS)), rigid: new Set(Object.keys(E.RIGIDS)),
   results: null, preview: {}, seed: 1, growing: false, progress: 0, ranking: null,
-  flatThick: 50, matView: "chart",
+  flatThick: 50, matView: "chart", view: "3d",
   spaces: [], spaceId: null, yUp: false, showAbs: true, nextId: 1,
 };
 const brief = () => ({ target: state.target, maxDepth: state.depth, massBudget: state.mass, porous: [...state.porous], rigid: [...state.rigid] });
@@ -532,6 +540,7 @@ const rankedWall = () => families().filter((f) => !isHang(f.key)).map((f) => cur
 
 // --------------------------------------------------------------- canvas ----
 function renderCanvas() {
+  ShapeView.detach();
   if (state.ws === "spaces") { renderSpacesCanvas(); return; }
   View3D.detach();
   const c = $("#canvas");
@@ -553,13 +562,21 @@ function renderCanvas() {
   const best = rankedWall().find((x) => x.family !== f.key);
   const series = [{ label: f.name, color: "var(--accent)", alpha: r.alpha, bold: true }]
     .concat(best ? [{ label: E.FAMILY[best.family].name + " (best other)", color: "#8a8e96", alpha: best.alpha, dashed: true }] : []);
-  c.innerHTML = `<div class="artboard"><div class="card-head"><h2>${f.name}</h2><span class="muted">Imitates ${f.imitates} · cross-section, ruler in mm</span></div>
-      <div class="big-drawing">${drawForm(f.key, r.params, r.extra, state.depth, { ruler: true, title: f.name })}</div>
+  const mats = [r.params.porous && [E.FELTS[r.params.porous].name, SOFT_COLORS[r.params.porous]],
+    r.params.rigid && [E.RIGIDS[r.params.rigid].name, HARD_COLORS[r.params.rigid]]].filter(Boolean);
+  const three = state.view === "3d";
+  c.innerHTML = `<div class="artboard"><div class="card-head"><h2>${f.name}</h2>
+        <div class="seg" role="group" aria-label="View"><button data-view="3d" aria-pressed="${three}">3D module</button><button data-view="2d" aria-pressed="${!three}">2D section</button></div></div>
+      <span class="muted">Imitates ${f.imitates} · ${three ? "600 × 600 mm module, " + mm(r.params.depth) + " deep" : "cross-section, ruler in mm"}</span>
+      ${three ? `<div id="sv-slot"></div><div class="row3d"><span class="muted" id="sv-note"></span><span class="swatches">${mats.map(([name, col]) => `<span><i style="background:${hex(col)}"></i>${esc(name)}</span>`).join("")}</span></div>`
+        : `<div class="big-drawing">${drawForm(f.key, r.params, r.extra, state.depth, { ruler: true, title: f.name })}</div>`}
       <p>${f.idea}</p></div>
     <div class="card"><div class="card-head"><h3>Which pitches it catches</h3><span class="hint">${isHang(f.key) ? "Both faces count, so the line can pass 1." : "100% = all sound caught at that pitch."} Orange bars: what your target cares about.</span></div>
       <div class="chart-scroll">${lineChart(series, { yMax: isHang(f.key) ? 2 : 1, weights })}</div>
       <div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join("")}</div></div>`;
+  if (three) $("#sv-note").textContent = ShapeView.show($("#sv-slot"), f.key, r) || "";
 }
+$("#canvas").addEventListener("click", (e) => { const sv = e.target.closest("[data-view]"); if (sv) { state.view = sv.dataset.view; renderCanvas(); } });
 $("#canvas").addEventListener("click", (e) => { const b = e.target.closest("[data-pick]"); if (b) { state.tool = b.dataset.pick; renderTools(); renderCanvas(); renderDock(); renderGuideTip(); } });
 
 const MAT_COLORS = ["#4a90e2", "#e6a23c", "#5bb67c", "#e46b5f", "#b07ce0", "#3fb8b0", "#d4d06a", "#f08fb0", "#8fa3ff", "#c98a5a", "#7fd1e8", "#a0c05a", "#d07ad0", "#bbbbbb"];
@@ -849,144 +866,299 @@ function bindSpacesDock() {
 }
 
 // ---------------------------------------------------------------- 3D view --
-const View3D = (() => {
-  const T = window.THREE;
-  let el = null, renderer, scene, camera, roomGroup, absGroup, space = null, raf = 0;
-  const orbit = { theta: -0.9, phi: 1.05, dist: 30, target: [0, 0, 0] };
-  function ensure() {
-    if (el) return el;
-    el = document.createElement("div");
-    el.className = "viewport";
-    if (!T) { el.innerHTML = '<div class="fallback">The 3D view could not load here. All the numbers below still work.</div>'; return el; }
-    renderer = new T.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-    renderer.setClearColor(0x0f1012);
-    el.appendChild(renderer.domElement);
-    el.insertAdjacentHTML("beforeend", '<div class="hud">Drag to orbit · scroll or pinch to zoom</div>');
-    scene = new T.Scene();
-    camera = new T.PerspectiveCamera(45, 1, 0.1, 2000);
-    camera.up.set(0, 0, 1);
-    scene.add(new T.AmbientLight(0xffffff, 0.55));
-    const sun = new T.DirectionalLight(0xffffff, 0.75); sun.position.set(30, -20, 60); scene.add(sun);
-    roomGroup = new T.Group(); absGroup = new T.Group(); scene.add(roomGroup, absGroup);
-    const cv = renderer.domElement, pts = new Map();
-    let last = null, pinch = 0;
-    cv.addEventListener("pointerdown", (e) => { cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); last = [e.clientX, e.clientY]; });
-    cv.addEventListener("pointermove", (e) => {
-      if (!pts.has(e.pointerId)) return;
-      pts.set(e.pointerId, [e.clientX, e.clientY]);
-      if (pts.size === 2) {
-        const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
-        if (pinch) zoom(pinch / d);
-        pinch = d; return;
-      }
-      orbit.theta -= (e.clientX - last[0]) * 0.008;
-      orbit.phi = Math.min(1.55, Math.max(0.08, orbit.phi - (e.clientY - last[1]) * 0.008));
-      last = [e.clientX, e.clientY]; draw();
-    });
-    const up = (e) => { pts.delete(e.pointerId); pinch = 0; };
-    cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
-    cv.addEventListener("wheel", (e) => { e.preventDefault(); zoom(Math.exp(e.deltaY * 0.001)); }, { passive: false });
-    new ResizeObserver(() => draw()).observe(el);
-    return el;
-  }
-  function zoom(f) { orbit.dist = Math.min(600, Math.max(2, orbit.dist * f)); draw(); }
-  function draw() {
-    if (!renderer || !el.isConnected) return;
+const T3 = window.THREE;
+// Representative colours of the real materials, used in every 3D view.
+const SOFT_COLORS = {
+  pet_felt_light: 0x9aa7b4, pet_felt_medium: 0x6f7f91, pet_felt_dense: 0x4f5d6e, recycled_cotton: 0xe6e1d8, wool_felt: 0xa89f94,
+  sheep_wool_batt: 0xefe6d2, hemp_fibre: 0xc8b48a, coconut_coir: 0x8a5a33, cork_granulate: 0xa8743f, cellulose_fibre: 0xd9d6cf,
+  wood_wool: 0xd8bf8c, mycelium: 0xefe9dc, mineral_wool: 0xc9b45a, melamine_foam: 0xf4f4f2,
+};
+const HARD_COLORS = { rigid_pet: 0x3e4650, birch_plywood: 0xd9b98a, solid_cardboard: 0xa9825a, pla_print: 0xe9efe6, fired_clay: 0xb4583a };
+const hex = (n) => "#" + n.toString(16).padStart(6, "0");
+
+// An orbit viewer: drag to orbit, wheel or pinch to zoom. `up` is the scene's vertical axis.
+function makeViewer({ up = "z", hud = "Drag to orbit · scroll or pinch to zoom", cls = "viewport" } = {}) {
+  const el = document.createElement("div");
+  el.className = cls;
+  const v = { el, ok: !!T3, root: null, orbit: { theta: -0.9, phi: 1.05, dist: 3, target: [0, 0, 0] } };
+  if (!T3) { el.innerHTML = '<div class="fallback">The 3D view could not load here. Everything else still works.</div>'; v.draw = () => {}; return v; }
+  const renderer = new T3.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  renderer.setClearColor(0x0f1012);
+  el.appendChild(renderer.domElement);
+  el.insertAdjacentHTML("beforeend", `<div class="hud">${hud}</div>`);
+  const scene = new T3.Scene(), camera = new T3.PerspectiveCamera(40, 1, 0.01, 3000);
+  if (up === "z") camera.up.set(0, 0, 1);
+  scene.add(new T3.HemisphereLight(0xffffff, 0x404048, 0.65));
+  const sun = new T3.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(up === "z" ? 3 : 2, up === "z" ? -2 : 3, up === "z" ? 6 : 4);
+  scene.add(sun);
+  v.root = new T3.Group();
+  scene.add(v.root);
+  let raf = 0;
+  v.draw = () => {
+    if (!el.isConnected) return;
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(() => {
       const w = el.clientWidth, h = el.clientHeight;
       if (!w || !h) return;
       renderer.setSize(w, h, false);
       camera.aspect = w / h; camera.updateProjectionMatrix();
-      const [tx, ty, tz] = orbit.target;
-      camera.position.set(tx + orbit.dist * Math.sin(orbit.phi) * Math.cos(orbit.theta), ty + orbit.dist * Math.sin(orbit.phi) * Math.sin(orbit.theta), tz + orbit.dist * Math.cos(orbit.phi));
+      const o = v.orbit, [tx, ty, tz] = o.target, s = Math.sin(o.phi), c = Math.cos(o.phi);
+      if (up === "z") camera.position.set(tx + o.dist * s * Math.cos(o.theta), ty + o.dist * s * Math.sin(o.theta), tz + o.dist * c);
+      else camera.position.set(tx + o.dist * s * Math.sin(o.theta), ty + o.dist * c, tz + o.dist * s * Math.cos(o.theta));
       camera.lookAt(tx, ty, tz);
+      sun.position.copy(camera.position).add(new T3.Vector3(up === "z" ? 0 : 1, up === "z" ? 0 : 2, up === "z" ? 3 : 0));
       renderer.render(scene, camera);
     });
-  }
-  function clear(g) { while (g.children.length) { const c = g.children.pop(); c.geometry && c.geometry.dispose(); c.material && c.material.dispose(); } }
+  };
+  v.clear = () => {
+    const kill = (o) => { o.children.slice().forEach(kill); if (o.geometry) o.geometry.dispose(); if (o.material) [].concat(o.material).forEach((m) => m.dispose()); };
+    v.root.children.slice().forEach((ch) => { kill(ch); v.root.remove(ch); });
+  };
+  const zoom = (f) => { v.orbit.dist = Math.min(800, Math.max(0.05, v.orbit.dist * f)); v.draw(); };
+  const cv = renderer.domElement, pts = new Map();
+  let last = null, pinch = 0;
+  cv.addEventListener("pointerdown", (e) => { cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); last = [e.clientX, e.clientY]; });
+  cv.addEventListener("pointermove", (e) => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pts.size === 2) { const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]); if (pinch) zoom(pinch / d); pinch = d; return; }
+    v.orbit.theta -= (e.clientX - last[0]) * 0.008;
+    v.orbit.phi = Math.min(Math.PI - 0.08, Math.max(0.08, v.orbit.phi - (e.clientY - last[1]) * 0.008));
+    last = [e.clientX, e.clientY]; v.draw();
+  });
+  const upEv = (e) => { pts.delete(e.pointerId); pinch = 0; };
+  cv.addEventListener("pointerup", upEv); cv.addEventListener("pointercancel", upEv);
+  cv.addEventListener("wheel", (e) => { e.preventDefault(); zoom(Math.exp(e.deltaY * 0.001)); }, { passive: false });
+  new ResizeObserver(() => v.draw()).observe(el);
+  return v;
+}
+
+// Spaces: the room and its absorbers (z up, metres).
+const View3D = (() => {
+  let v = null, space = null;
   function buildRoom(sp) {
-    clear(roomGroup);
     const look = { floor: [0x6f737a, 0.95], wall: [0xb9bdc4, 0.22], ceiling: [0xd4d7dc, 0.1] };
     for (const tag of ["floor", "wall", "ceiling"]) {
       const pos = [];
       sp.mesh.tris.forEach((t, i) => { if (sp.mesh.tags[i] === tag) for (const p of t) pos.push(...p); });
       if (!pos.length) continue;
-      const g = new T.BufferGeometry(); g.setAttribute("position", new T.Float32BufferAttribute(pos, 3)); g.computeVertexNormals();
+      const g = new T3.BufferGeometry(); g.setAttribute("position", new T3.Float32BufferAttribute(pos, 3)); g.computeVertexNormals();
       const [color, opacity] = look[tag];
-      roomGroup.add(new T.Mesh(g, new T.MeshLambertMaterial({ color, transparent: opacity < 1, opacity, side: T.DoubleSide, depthWrite: opacity >= 1 })));
-      roomGroup.add(new T.LineSegments(new T.EdgesGeometry(g, 25), new T.LineBasicMaterial({ color: 0x8a8f98 })));
+      v.root.add(new T3.Mesh(g, new T3.MeshLambertMaterial({ color, transparent: opacity < 1, opacity, side: T3.DoubleSide, depthWrite: opacity >= 1 })));
+      v.root.add(new T3.LineSegments(new T3.EdgesGeometry(g, 25), new T3.LineBasicMaterial({ color: 0x8a8f98 })));
     }
   }
   function buildAbsorbers(sp) {
-    clear(absGroup);
     if (!state.showAbs) return;
-    const { min, max } = sp.info, W = max[0] - min[0], D = max[1] - min[1], H = max[2] - min[2];
-    const panel = 1.2;
+    const { min, max } = sp.info, W = max[0] - min[0], D = max[1] - min[1], H = max[2] - min[2], panel = 1.2;
     for (const pl of sp.placements) {
       const r = current(pl.family);
       if (!r || pl.area <= 0) continue;
-      const n = Math.min(400, Math.ceil(pl.area / (panel * panel))), color = new T.Color(FAMILY_COLORS[pl.family]);
-      const depth = Math.max(0.03, r.params.depth / 1000);
-      const mat = new T.MeshLambertMaterial({ color });
+      const n = Math.min(400, Math.ceil(pl.area / (panel * panel))), depth = Math.max(0.03, r.params.depth / 1000);
+      const color = r.params.porous ? SOFT_COLORS[r.params.porous] : HARD_COLORS[r.params.rigid];
+      const mat = new T3.MeshStandardMaterial({ color, roughness: 0.9 });
       if (isHang(pl.family)) {
         const cols = Math.max(1, Math.round(Math.sqrt((n * W) / D))), rows = Math.ceil(n / cols);
         for (let k = 0; k < n; k++) {
-          const i = k % cols, j = Math.floor(k / cols);
-          const m = new T.Mesh(new T.BoxGeometry(panel, panel, depth), mat);
-          m.position.set(min[0] + ((i + 0.5) / cols) * W, min[1] + ((j + 0.5) / rows) * D, min[2] + H * 0.82);
-          absGroup.add(m);
+          const m = new T3.Mesh(new T3.BoxGeometry(panel, panel, depth), mat);
+          m.position.set(min[0] + ((k % cols + 0.5) / cols) * W, min[1] + ((Math.floor(k / cols) + 0.5) / rows) * D, min[2] + H * 0.82);
+          v.root.add(m);
         }
-      } else {
-        // Panels in rows along each wall, kept clear of the corners, filled from 1.4 m up.
-        const gap = 0.2, pitch = panel + gap;
-        const walls = [
-          { len: W, at: (t) => [min[0] + t, min[1] + depth / 2], rot: 0 },
-          { len: D, at: (t) => [max[0] - depth / 2, min[1] + t], rot: Math.PI / 2 },
-          { len: W, at: (t) => [max[0] - t, max[1] - depth / 2], rot: 0 },
-          { len: D, at: (t) => [min[0] + depth / 2, max[1] - t], rot: Math.PI / 2 },
-        ].map((w) => ({ ...w, slots: Math.max(1, Math.floor((w.len - 0.3 + gap) / pitch)) }));
-        const rowsMax = Math.max(1, Math.floor((H - 1.4 - 0.2 + 0.15) / (panel + 0.15)));
-        let placed = 0;
-        for (let row = 0; row < rowsMax && placed < n; row++) {
-          for (const w of walls) {
-            const start = (w.len - (w.slots * pitch - gap)) / 2 + panel / 2;
-            for (let k = 0; k < w.slots && placed < n; k++, placed++) {
-              const [x, y] = w.at(start + k * pitch);
-              const m = new T.Mesh(new T.BoxGeometry(panel, depth, panel), mat);
-              m.position.set(x, y, min[2] + 1.4 + panel / 2 + row * (panel + 0.15)); m.rotation.z = w.rot;
-              absGroup.add(m);
-            }
+        continue;
+      }
+      // Panels in rows along each wall, kept clear of the corners, filled from 1.4 m up.
+      const gap = 0.2, pitch = panel + gap;
+      const walls = [
+        { len: W, at: (t) => [min[0] + t, min[1] + depth / 2], rot: 0 },
+        { len: D, at: (t) => [max[0] - depth / 2, min[1] + t], rot: Math.PI / 2 },
+        { len: W, at: (t) => [max[0] - t, max[1] - depth / 2], rot: 0 },
+        { len: D, at: (t) => [min[0] + depth / 2, max[1] - t], rot: Math.PI / 2 },
+      ].map((w) => ({ ...w, slots: Math.max(1, Math.floor((w.len - 0.3 + gap) / pitch)) }));
+      const rowsMax = Math.max(1, Math.floor((H - 1.4 - 0.2 + 0.15) / (panel + 0.15)));
+      let placed = 0;
+      for (let row = 0; row < rowsMax && placed < n; row++) {
+        for (const w of walls) {
+          const start = (w.len - (w.slots * pitch - gap)) / 2 + panel / 2;
+          for (let k = 0; k < w.slots && placed < n; k++, placed++) {
+            const [x, y] = w.at(start + k * pitch);
+            const m = new T3.Mesh(new T3.BoxGeometry(panel, depth, panel), mat);
+            m.position.set(x, y, min[2] + 1.4 + panel / 2 + row * (panel + 0.15)); m.rotation.z = w.rot;
+            v.root.add(m);
           }
         }
       }
     }
   }
-  function frame(sp, keepView) {
+  function rebuild() { v.clear(); buildRoom(space); buildAbsorbers(space); }
+  function frame(sp) {
     const { min, max } = sp.info;
-    orbit.target = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 3];
-    if (!keepView) orbit.dist = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) * 1.35;
+    Object.assign(v.orbit, { theta: -0.9, phi: 1.05, target: [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 3],
+      dist: Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) * 1.35 });
   }
   return {
     attach(slot, sp) {
-      const v = ensure();
-      slot.replaceWith(v);
-      if (!T) return;
+      if (!v) v = makeViewer({ up: "z" });
+      slot.replaceWith(v.el);
+      if (!v.ok) return;
       const changed = space !== sp;
       space = sp;
-      buildRoom(sp); buildAbsorbers(sp);
-      if (changed) frame(sp, false);
-      draw();
+      rebuild();
+      if (changed) frame(sp);
+      v.draw();
     },
-    detach() { if (el && el.isConnected) el.remove(); },
-    update() { if (space && T) { buildAbsorbers(space); draw(); } },
+    detach() { if (v && v.el.isConnected) v.el.remove(); },
+    update() { if (v && v.ok && space) { rebuild(); v.draw(); } },
     preset(k) {
-      if (!space || !T) return;
-      if (k === "top") { orbit.phi = 0.08; orbit.theta = -Math.PI / 2; }
-      else { orbit.theta = -0.9; orbit.phi = 1.05; frame(space, false); }
-      draw();
+      if (!v || !v.ok || !space) return;
+      if (k === "top") Object.assign(v.orbit, { phi: 0.08, theta: -Math.PI / 2 }); else frame(space);
+      v.draw();
     },
+  };
+})();
+
+// Shapes: one 600 x 600 mm module of the grown shape (y up, metres; wall at z = 0, room towards +z).
+// The front of resonators, coils and the moss layer is cut away on the left half to show the inside.
+const ShapeView = (() => {
+  let v = null, shown = null;
+  const TILE = 0.6;
+  function hashf(i, j, k) { const x = Math.sin(i * 127.1 + j * 311.7 + k * 74.7) * 43758.5453; return x - Math.floor(x); }
+  const mat = (color, extra = {}) => new T3.MeshStandardMaterial({ color, roughness: 0.92, metalness: 0, ...extra });
+  function box(w, h, d, x, y, z, m) { const b = new T3.Mesh(new T3.BoxGeometry(w, h, d), m); b.position.set(x, y, z); v.root.add(b); return b; }
+  // Instanced cubes: cells [[x, y, z, sx, sy, sz], ...]
+  function cubes(cells, m) {
+    if (!cells.length) return;
+    const inst = new T3.InstancedMesh(new T3.BoxGeometry(1, 1, 1), m, cells.length), o = new T3.Object3D();
+    cells.forEach(([x, y, z, sx, sy, sz], i) => { o.position.set(x, y, z); o.scale.set(sx, sy, sz); o.updateMatrix(); inst.setMatrixAt(i, o.matrix); });
+    v.root.add(inst);
+  }
+  // A porous block made of voxels: fractions[i] is the solid share of slice i (front first).
+  function sponge(fractions, zFront, thick, m, { cutLeft = false, n = 20, axis = "z", y0 = 0 } = {}) {
+    const cell = TILE / n, dz = thick / fractions.length, cells = [];
+    fractions.forEach((s, k) => {
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+        if (cutLeft && i < n / 2) continue;
+        if (hashf(i, j, k) >= s) continue;
+        const a = (i + 0.5) * cell, b = (j + 0.5) * cell, c = zFront - (k + 0.5) * dz;
+        cells.push(axis === "z" ? [a, b, c, cell * 0.92, cell * 0.92, dz * 0.92] : [a, y0 + c, b, cell * 0.92, dz * 0.92, cell * 0.92]);
+      }
+    });
+    cubes(cells, m);
+  }
+  function wall() {
+    box(TILE + 0.12, TILE + 0.12, 0.01, TILE / 2, TILE / 2, -0.005, mat(0x55585e));
+  }
+  // Perforated plate at z in [z0, z0 + t] with dark discs for the holes; only the right half when cut.
+  function plate(z0, t, holeMm, porosity, hardColor, cutLeft) {
+    const d = holeMm / 1000, spacing = Math.max(d * Math.sqrt(Math.PI / (4 * porosity)), 0.012), n = Math.min(60, Math.floor(TILE / spacing));
+    const x0 = cutLeft ? TILE / 2 : 0, w = TILE - x0;
+    box(w, TILE, t, x0 + w / 2, TILE / 2, z0 + t / 2, mat(hardColor));
+    const disc = new T3.CylinderGeometry(Math.max(d, 0.003) / 2, Math.max(d, 0.003) / 2, 0.002, 12);
+    disc.rotateX(Math.PI / 2);
+    const holes = [];
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      const x = (i + 0.5) * (TILE / n), y = (j + 0.5) * (TILE / n);
+      if (x >= x0) holes.push([x, y]);
+    }
+    const inst = new T3.InstancedMesh(disc, mat(0x15161a), holes.length), o = new T3.Object3D();
+    holes.forEach(([x, y], i) => { o.position.set(x, y, z0 + t + 0.0008); o.updateMatrix(); inst.setMatrixAt(i, o.matrix); });
+    v.root.add(inst);
+  }
+  function partitions(depth, spacing, hardColor, x0 = 0) {
+    const m = mat(hardColor), n = Math.round(TILE / spacing);
+    for (let k = 0; k <= n; k++) {
+      const p = k * (TILE / n);
+      if (p >= x0 - 1e-9) box(0.003, TILE, depth, p, TILE / 2, depth / 2, m);
+      box(TILE - x0, 0.003, depth, x0 + (TILE - x0) / 2, p, depth / 2, m);
+    }
+  }
+  const builders = {
+    spikes(p) {
+      const soft = mat(SOFT_COLORS[p.porous]), D = p.depth / 1000, taper = 1 - p.base, pitch = TILE / 6;
+      if (p.base > 0) box(TILE, TILE, D * p.base, TILE / 2, TILE / 2, (D * p.base) / 2, soft);
+      const pts = [];
+      for (let i = 0; i <= 24; i++) {
+        const z = D * p.base + (D - D * p.base) * (i / 24), t = 1 - z / D;
+        const s = taper > 0 ? (t >= taper ? 1 : Math.pow(t / taper, p.taper)) : 1;
+        pts.push(new T3.Vector2(Math.max(1e-4, (pitch * Math.sqrt(s)) / Math.SQRT2), z));
+      }
+      const g = new T3.LatheGeometry(pts, 4);
+      g.rotateX(Math.PI / 2); g.rotateZ(Math.PI / 4); g.computeVertexNormals();
+      for (let i = 0; i < 6; i++) for (let j = 0; j < 6; j++) {
+        const m = new T3.Mesh(g, soft); m.position.set((i + 0.5) * pitch, (j + 0.5) * pitch, 0); v.root.add(m);
+      }
+      return "Spikes on a 100 mm grid";
+    },
+    sponge(p, r) {
+      const soft = mat(SOFT_COLORS[p.porous]), D = p.depth / 1000, ds = D * (1 - p.gap);
+      sponge(r.extra.fractions, D, ds, soft);
+      if (p.gap > 0.02) for (const [x, y] of [[0.1, 0.1], [0.5, 0.1], [0.1, 0.5], [0.5, 0.5]]) box(0.012, 0.012, D * p.gap, x, y, (D * p.gap) / 2, mat(0x888b91));
+      return p.gap > 0.02 ? `Sponge on small spacers, ${mm(p.depth * p.gap)} off the wall` : "Sponge against the wall";
+    },
+    cloud(p, r) {
+      const soft = mat(SOFT_COLORS[p.porous]), D = p.depth / 1000, hang = 0.35;
+      sponge(r.extra.fractions, hang + D, D, soft, { axis: "y" });
+      for (const [x, z] of [[0.1, 0.1], [0.5, 0.1], [0.1, 0.5], [0.5, 0.5]]) box(0.002, TILE * 0.4, 0.002, x, hang + D + TILE * 0.2, z, mat(0xbfc3c9));
+      box(TILE + 0.12, 0.01, TILE + 0.12, TILE / 2, hang + D + TILE * 0.4, TILE / 2, mat(0x55585e));
+      return "Hanging horizontally below the ceiling";
+    },
+    bottles(p) {
+      const hard = HARD_COLORS[p.rigid], D = p.depth / 1000, cellSize = 0.1, n = 6, soft = mat(SOFT_COLORS[p.porous]);
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+        const d = (i + j) % 2 ? D * p.ratio : D, x = (i + 0.5) * cellSize, y = (j + 0.5) * cellSize;
+        if (D - d > 0.001) box(cellSize, cellSize, D - d, x, y, (D - d) / 2, mat(hard));
+        if (p.fill > 0.01) box(cellSize * 0.96, cellSize * 0.96, d * p.fill, x, y, D - (d * p.fill) / 2, soft);
+      }
+      partitions(D, cellSize, hard);
+      plate(D, p.plate / 1000, p.hole, p.porosity, hard, true);
+      return "Plate cut away on the left to show the cavities";
+    },
+    coil(p, r) {
+      const hard = mat(HARD_COLORS[p.rigid]), D = p.depth / 1000, a = Math.max(p.cell / 1000, 0.02), w = p.width / 1000, wall2 = 0.002;
+      const n = Math.max(1, Math.floor(TILE / a)), size = TILE / n, lens = r.extra.lengths;
+      for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+        const L = lens[(i + j) % 4], lanes = Math.max(1, Math.min(Math.floor(size / (w + wall2)), Math.ceil(L / D))), lane = size / lanes;
+        const x0 = i * size, y0 = j * size;
+        for (let k = 1; k < lanes; k++) {
+          const front = k % 2 === 1, len = D - w;
+          box(size, wall2, len, x0 + size / 2, y0 + k * lane, front ? len / 2 : w + len / 2, hard);
+        }
+        if (i >= n / 2) { // lid with one slot over the first lane
+          box(size, size - lane, wall2, x0 + size / 2, y0 + lane + (size - lane) / 2, D + wall2 / 2, hard);
+        }
+      }
+      partitions(D, size, HARD_COLORS[p.rigid]);
+      return "Lid cut away on the left to show the folded channels";
+    },
+    hybrid(p, r) {
+      const hard = HARD_COLORS[p.rigid], D = p.depth / 1000, cav = r.extra.cavity, t = p.plate / 1000;
+      partitions(cav, 0.1, hard);
+      plate(cav, t, p.hole, p.porosity, hard, false);
+      sponge(r.extra.fractions, D, D * p.front, mat(SOFT_COLORS[p.porous]), { cutLeft: true });
+      return "Moss layer cut away on the left to show the plate and cavities";
+    },
+  };
+  function build(key, r) {
+    v.clear();
+    if (key !== "cloud") wall();
+    const note = builders[key](r.params, r);
+    const D = r.params.depth / 1000, h = key === "cloud" ? 0.35 + D + TILE * 0.4 : TILE;
+    Object.assign(v.orbit, key === "cloud" ? { target: [TILE / 2, h / 2, TILE / 2], dist: 1.3, theta: 0.7, phi: 1.2 }
+      : { target: [TILE / 2, TILE / 2, D / 2], dist: 1.05, theta: -0.8, phi: 1.0 });
+    return note;
+  }
+  return {
+    show(slot, key, r) {
+      if (!v) v = makeViewer({ up: "y", cls: "viewport shape-view" });
+      slot.replaceWith(v.el);
+      if (!v.ok) return "";
+      const sig = key + JSON.stringify(r.params);
+      if (shown !== sig) { shown = sig; v.note = build(key, r); }
+      v.draw();
+      return v.note;
+    },
+    detach() { if (v && v.el.isConnected) v.el.remove(); },
   };
 })();
 
