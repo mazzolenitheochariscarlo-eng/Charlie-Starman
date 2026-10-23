@@ -219,8 +219,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     <span class="mark" aria-hidden="true">Bt</span>
     <span class="appname">Biothing Sound Lab</span>
     <div class="tabs" role="tablist" id="ws-tabs" aria-label="Workspaces">
-      <button role="tab" data-ws="shapes" id="tab-shapes">Shapes</button>
-      <button role="tab" data-ws="forms" id="tab-forms">Forms</button>
+      <button role="tab" data-ws="grow" id="tab-grow">Structures</button>
       <button role="tab" data-ws="materials" id="tab-materials">Materials</button>
       <button role="tab" data-ws="spaces" id="tab-spaces">Spaces</button>
     </div>
@@ -1585,7 +1584,7 @@ const TARGET_INFO = {
 const GROUP_ORDER = ["Plant", "Animal", "Fungus", "Recycled", "Mineral & synthetic"];
 const FAMILY_COLORS = { spikes: "#4a90e2", sponge: "#5bb67c", cloud: "#e6a23c", bottles: "#b07ce0", coil: "#e46b5f", hybrid: "#3fb8b0" };
 const state = {
-  ws: "shapes", tool: "all", target: "exhibition", depth: 100, mass: 3, hang: true,
+  ws: "grow", gtool: "all", tool: "all", target: "exhibition", depth: 100, mass: 3, hang: true,
   porous: new Set(Object.keys(E.FELTS)), rigid: new Set(Object.keys(E.RIGIDS)),
   results: null, preview: {}, seed: 1, growing: false, progress: 0, ranking: null,
   flatThick: 50, matView: "chart", view: "3d",
@@ -1602,6 +1601,15 @@ function materialPicker(id) {
   </select></div>`;
 }
 const families = () => E.FAMILIES.filter((f) => state.hang || f.mounting !== "hanging");
+// The Structures workspace holds every generator. The selected tool decides the mode:
+// surface textures (the panel-like families) or free forms (growth rules, sheets, membrane).
+const SURF_TOOLS = ["allsurf", ...E.FAMILIES.map((f) => f.key)];
+const gmode = () => (state.ws !== "grow" ? state.ws : SURF_TOOLS.includes(state.gtool) ? "shapes" : "forms");
+function setTool(k) {
+  state.gtool = k;
+  if (SURF_TOOLS.includes(k)) state.tool = k === "allsurf" ? "all" : k; else state.fRule = k;
+  renderOptbar(); renderTools(); renderCanvas(); renderDock(); renderStatus(); renderGuideTip();
+}
 const current = (key) => (state.results && state.results.find((r) => r.family === key)) || state.preview[key];
 const grown = (key) => !!(state.results && state.results.find((r) => r.family === key));
 
@@ -1638,7 +1646,7 @@ function setWorkspace(ws) { state.ws = ws; renderAll(); }
 
 function renderOptbar() {
   const ob = $("#optbar");
-  if (state.ws === "forms") { renderFormsBar(ob); return; }
+  if (gmode() === "forms") { renderFormsBar(ob); return; }
   if (state.ws === "spaces") {
     ob.innerHTML = `<div class="opt" id="opt-add"><label for="add-preset">Add a space</label>
         <select id="add-preset">${R.PRESETS.map((p) => `<option value="${p.key}">${p.name} (${p.size.join(" × ")} m)</option>`).join("")}</select>
@@ -1665,33 +1673,33 @@ function renderOptbar() {
     <span class="divider"></span>
     <label class="opt"><input type="checkbox" id="hang" ${state.hang ? "checked" : ""}> Allow hanging</label>
     <span class="spacer"></span>
-    <button class="btn primary" id="btn-grow">${state.results ? "Grow again" : "Grow shapes"}</button>`;
+    <button class="btn primary" id="btn-grow">${state.results ? "Grow surfaces again" : "Grow surface textures"}</button>`;
   updateOutputs();
   $("#target").onchange = (e) => { state.target = e.target.value; briefChanged(); renderCanvas(); renderDock(); renderStatus(); };
   $("#mat-pick").onchange = (e) => { state.matPick = e.target.value; briefChanged(); renderCanvas(); renderDock(); renderStatus(); };
   for (const id of ["depth", "mass"]) {
     $("#" + id).oninput = (e) => { state[id] = Number(e.target.value); updateOutputs(); briefChanged(); renderCanvas(); renderDock(); renderStatus(); };
   }
-  $("#hang").onchange = (e) => { state.hang = e.target.checked; if (state.tool === "cloud" && !state.hang) state.tool = "all"; briefChanged(); renderTools(); renderCanvas(); renderDock(); };
+  $("#hang").onchange = (e) => { state.hang = e.target.checked; if (state.gtool === "cloud" && !state.hang) { state.gtool = "allsurf"; state.tool = "all"; } briefChanged(); renderTools(); renderCanvas(); renderDock(); };
   $("#btn-grow").onclick = grow;
 }
 function updateOutputs() {
   if ($("#depth-out")) $("#depth-out").textContent = mm(state.depth);
   if ($("#mass-out")) $("#mass-out").textContent = state.mass + " kg/m²";
-  if ($("#btn-grow")) { $("#btn-grow").textContent = state.growing ? "Growing…" : state.results ? "Grow again" : "Grow shapes"; $("#btn-grow").disabled = state.growing; }
+  if ($("#btn-grow")) { $("#btn-grow").textContent = state.growing ? "Growing…" : state.results ? "Grow surfaces again" : "Grow surface textures"; $("#btn-grow").disabled = state.growing; }
 }
 
 function renderTools() {
   let items;
-  if (state.ws === "shapes") items = [["all", "All shapes side by side"], "sep", ...families().map((f) => [f.key, `${f.name}: imitates ${f.imitates}`])];
-  else if (state.ws === "materials") items = [["chart", "Compare chart"], ["table", "Material table"]];
-  else if (state.ws === "forms") items = [["all", "All natural growth rules"], ...NATURAL.map((k) => [k, `${G.RULES[k].name}: imitates ${G.RULES[k].imitates}`]), "sep",
+  if (state.ws === "materials") items = [["chart", "Compare chart"], ["table", "Material table"]];
+  else if (state.ws === "grow") items = [["allsurf", "All surface textures side by side"], ...families().map((f) => [f.key, `${f.name} (surface texture): imitates ${f.imitates}`]), "sep",
+    ["all", "All natural growth rules"], ...NATURAL.map((k) => [k, `${G.RULES[k].name}: imitates ${G.RULES[k].imitates}`]), "sep",
     ["allsheets", "All sheet hybrids (felt sheets arranged by nature)"], ...HYBRID.map((k) => [k, `${G.RULES[k].name} (sheets): imitates ${G.RULES[k].imitates}`]), "sep",
     ["membrane", "Sound-grown membrane (after Biothing's Genware)"]];
   else items = [["orbit", "Orbit view (drag in the viewport)"], ["top", "Top view"], ["home", "Reset view"], "sep", ["eye", "Show or hide absorbers"]];
   $("#tools").innerHTML = items.map((it) => it === "sep" ? '<span class="tool-sep" aria-hidden="true"></span>' : (() => {
     const [k, label] = it;
-    const pressed = state.ws === "shapes" ? state.tool === k : state.ws === "forms" ? state.fRule === k : state.ws === "materials" ? state.matView === k : k === "eye" ? state.showAbs : false;
+    const pressed = state.ws === "grow" ? state.gtool === k : state.ws === "materials" ? state.matView === k : k === "eye" ? state.showAbs : false;
     return `<button class="tool" data-tool="${k}" aria-pressed="${pressed}" aria-label="${esc(label)}" title="${esc(label)}">${icon(k)}</button>`;
   })()).join("");
 }
@@ -1699,9 +1707,8 @@ $("#tools").addEventListener("click", (e) => {
   const b = e.target.closest("[data-tool]");
   if (!b) return;
   const k = b.dataset.tool;
-  if (state.ws === "shapes") { state.tool = k; renderTools(); renderCanvas(); renderDock(); renderGuideTip(); }
+  if (state.ws === "grow") setTool(k);
   else if (state.ws === "materials") { state.matView = k; renderTools(); renderCanvas(); }
-  else if (state.ws === "forms") { state.fRule = k; renderTools(); renderOptbar(); if (!selForm()) renderCanvas(); renderDock(); }
   else if (k === "eye") { state.showAbs = !state.showAbs; renderTools(); View3D.update(); }
   else View3D.preset(k);
 });
@@ -1885,7 +1892,7 @@ const rankedWall = () => families().filter((f) => !isHang(f.key)).map((f) => cur
 // --------------------------------------------------------------- canvas ----
 function renderCanvas() {
   ShapeView.detach(); FormView.detach(); FormWave.stop();
-  if (state.ws === "forms") { View3D.detach(); renderFormsCanvas(); return; }
+  if (gmode() === "forms") { View3D.detach(); renderFormsCanvas(); return; }
   if (state.ws === "spaces") { renderSpacesCanvas(); return; }
   View3D.detach();
   const c = $("#canvas");
@@ -1893,7 +1900,7 @@ function renderCanvas() {
   if (!allowedSoft().length) { c.innerHTML = `<div class="artboard"><h2>No soft materials selected</h2><p class="muted">Open the Materials workspace and pick at least one.</p></div>`; return; }
   if (state.tool === "all") {
     const wallRank = rankedWall().map((r) => r.family);
-    c.innerHTML = `<div class="artboard"><div class="card-head"><h2>All shape families</h2><span class="muted">${state.results ? "Grown with your settings" : "Seeds: press Grow shapes to evolve them"}</span></div>
+    c.innerHTML = `<div class="artboard"><div class="card-head"><h2>Surface textures</h2><span class="muted">${state.results ? "Grown with your settings" : "Seeds: press Grow surface textures to evolve them"}</span></div>
       <div class="art-grid">${families().map((f) => {
         const r = current(f.key), rank = wallRank.indexOf(f.key);
         const pill = !grown(f.key) ? '<span class="pill seed">seed</span>' : isHang(f.key) ? '<span class="pill hang">hanging, both faces</span>' : `<span class="pill ${rank === 0 ? "win" : ""}">#${rank + 1} on wall</span>`;
@@ -1922,7 +1929,7 @@ function renderCanvas() {
   if (three) $("#sv-note").textContent = ShapeView.show($("#sv-slot"), f.key, r) || "";
 }
 $("#canvas").addEventListener("click", (e) => { const sv = e.target.closest("[data-view]"); if (sv) { state.view = sv.dataset.view; renderCanvas(); } });
-$("#canvas").addEventListener("click", (e) => { const b = e.target.closest("[data-pick]"); if (b) { state.tool = b.dataset.pick; renderTools(); renderCanvas(); renderDock(); renderGuideTip(); } });
+$("#canvas").addEventListener("click", (e) => { const b = e.target.closest("[data-pick]"); if (b) setTool(b.dataset.pick); });
 
 const MAT_COLORS = ["#4a90e2", "#e6a23c", "#5bb67c", "#e46b5f", "#b07ce0", "#3fb8b0", "#d4d06a", "#f08fb0", "#8fa3ff", "#c98a5a", "#7fd1e8", "#a0c05a", "#d07ad0", "#bbbbbb"];
 function materialsCanvas() {
@@ -1934,7 +1941,7 @@ function materialsCanvas() {
   const scored = series.map((s) => ({ ...s, score: s.alpha.reduce((a, x, i) => a + x * w[i], 0) })).sort((a, b) => b.score - a.score);
   const head = `<div class="card"><div class="card-head"><h3>Materials on their own: a flat ${t} mm layer on a wall</h3>
       <label class="opt"><span class="muted">Thickness</span><input type="range" id="flat-t" min="10" max="150" step="5" value="${t}"><output class="mono">${t} mm</output></label></div>
-    <p class="hint">Before any shaping, how much of each pitch does the plain material catch? The shapes in the Shapes workspace start from these.</p>`;
+    <p class="hint">Before any shaping, how much of each pitch does the plain material catch? The structures in the Structures workspace start from these.</p>`;
   if (state.matView === "table") {
     return head + `<div class="table-wrap"><table><thead><tr><th>Material</th><th>Group</th><th class="num">Catches (your target)</th><th class="num">Weight for ${t} mm</th><th class="num">Density</th><th class="num">CO₂ / kg</th><th class="num">€ / kg</th><th>Shapeable</th></tr></thead><tbody>
       ${scored.map((s) => { const m = E.FELTS[s.key]; return `<tr><td>${esc(m.name)}</td><td>${m.group}</td><td class="num">${pct(s.score)}</td><td class="num">${fix(s.mass, 2)} kg/m²</td><td class="num">${m.density} kg/m³</td><td class="num">${m.carbon}</td><td class="num">${m.cost}</td><td>${m.formable ? "yes" : "flat"}</td></tr>`; }).join("")}
@@ -1953,9 +1960,9 @@ function bindMaterialsCanvas() {
 // ----------------------------------------------------------------- dock ----
 function renderDock() {
   const d = $("#dock");
-  if (state.ws === "shapes") d.innerHTML = propertiesPanel() + layersPanel();
+  if (gmode() === "shapes") d.innerHTML = propertiesPanel() + layersPanel() + formsLayersPanel();
   else if (state.ws === "materials") d.innerHTML = materialsPanel() + rigidPanel();
-  else if (state.ws === "forms") d.innerHTML = soundPanel() + formsPropsPanel() + formsLayersPanel();
+  else if (gmode() === "forms") d.innerHTML = soundPanel() + formsPropsPanel() + formsLayersPanel() + layersPanel();
   else d.innerHTML = spacesPanel() + spacePropsPanel() + absorbersPanel();
   bindDock();
 }
@@ -1982,7 +1989,7 @@ function propertiesPanel() {
 }
 function layersPanel() {
   const wall = rankedWall(), list = [...wall, ...families().filter((f) => isHang(f.key)).map((f) => current(f.key))];
-  return `<details class="panel" open id="panel-layers"><summary>Layers</summary><div class="panel-body">
+  return `<details class="panel" ${gmode() === "shapes" ? "open" : ""} id="panel-layers"><summary>Grown surface textures</summary><div class="panel-body">
     ${list.map((r, i) => `<button class="layer" data-pick-layer="${r.family}" aria-pressed="${state.tool === r.family}">
       <span class="thumb">${drawForm(r.family, r.params, r.extra, state.depth)}</span>
       <span><strong>${E.FAMILY[r.family].name}</strong><small>${isHang(r.family) ? "hanging" : "#" + (i + 1) + " on wall"}${grown(r.family) ? "" : " · seed"}</small></span>
@@ -2009,7 +2016,7 @@ function rankingHTML() {
     <div class="track"><i style="width:${Math.min(100, (r.score / max) * 100)}%"></i></div><span class="mono">${hang ? r.score.toFixed(2) : pct(r.score)}</span></div>`).join("")}</div>`;
 }
 function bindDock() {
-  $$("[data-pick-layer]").forEach((b) => b.onclick = () => { state.tool = b.dataset.pickLayer; renderTools(); renderCanvas(); renderDock(); renderGuideTip(); });
+  $$("[data-pick-layer]").forEach((b) => b.onclick = () => setTool(b.dataset.pickLayer));
   $$("[data-porous]").forEach((c) => c.onchange = () => { toggle(state.porous, c.dataset.porous); afterMaterials(); });
   $$("[data-rigid]").forEach((c) => c.onchange = () => { if (state.rigid.size === 1 && state.rigid.has(c.dataset.rigid)) { c.checked = true; return; } toggle(state.rigid, c.dataset.rigid); afterMaterials(); });
   $$("[data-preset]").forEach((b) => b.onclick = () => {
@@ -2019,9 +2026,10 @@ function bindDock() {
   });
   if ($("#rank-mats")) $("#rank-mats").onclick = () => rankMaterials(state.tool);
   if ($("#use-in-space")) $("#use-in-space").onclick = () => { const sp = curSpace(); if (sp) addPlacement(sp, state.tool); setWorkspace("spaces"); };
-  if (state.ws === "shapes" && state.tool !== "all") setupDownloads(state.tool, current(state.tool));
+  if (gmode() === "shapes" && state.tool !== "all") setupDownloads(state.tool, current(state.tool));
   if (state.ws === "spaces") bindSpacesDock();
-  if (state.ws === "forms") { bindSoundPanel(); bindFormsDock(); }
+  if (gmode() === "forms") bindSoundPanel();
+  if (state.ws === "grow") bindFormsDock();
 }
 const toggle = (set, k) => (set.has(k) ? set.delete(k) : set.add(k));
 function afterMaterials() { briefChanged(); renderDock(); renderCanvas(); renderStatus(); }
@@ -2039,7 +2047,7 @@ async function grow() {
     state.results = breeders.map((br) => br.best).filter(Boolean);
     state.progress = Math.min(1, breeders[0].generation / breeders[0].generations);
     renderCanvas(); renderStatus();
-    if (state.ws === "shapes") renderDock();
+    if (gmode() === "shapes") renderDock();
     await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
   }
   state.results = breeders.map((br) => br.best);
@@ -2058,7 +2066,7 @@ async function rankMaterials(key) {
     await new Promise((r) => setTimeout(r, 0));
   }
   state.ranking = { family: key, rows: out.sort((a, b) => b.fitness - a.fitness) };
-  if (state.ws === "shapes" && state.tool === key) renderDock();
+  if (gmode() === "shapes" && state.tool === key) renderDock();
 }
 
 // ------------------------------------------------------------- downloads ---
@@ -2656,7 +2664,7 @@ async function growForms() {
         }));
         for (const r of res) if (!best || r.fitness > best.fitness) best = r;
         state.fLive = best; state.fProgress = ++steps / total;
-        if (state.ws === "forms") { renderFormsCanvas(); renderStatus(); }
+        if (gmode() === "forms") { renderFormsCanvas(); renderStatus(); }
         if (gen < GENS) pop = G.nextGeneration(pop, res.map((r) => r.fitness), rand);
       }
       made.push(addForm(best));
@@ -2678,23 +2686,29 @@ function addForm(r, name) {
   const f = { ...r, id: state.fNext++, name: name || `${G.RULES[r.rule].name} ${same + 1}`, baseline: null };
   state.forms.push(f);
   Pool.run("baseline", { material: { sigma: E.FELTS[f.material].sigma, density: E.FELTS[f.material].density }, mass: f.mass })
-    .then((b) => { f.baseline = b.area; if (state.ws === "forms" && !state.fGrowing) { renderFormsCanvas(); renderDock(); } })
+    .then((b) => { f.baseline = b.area; if (gmode() === "forms" && !state.fGrowing) { renderFormsCanvas(); renderDock(); } })
     .catch(() => {});
   return f;
 }
 
+function targetSelect() {
+  return `<div class="opt" id="opt-target"><label for="target">Quiet</label>
+      <select id="target">${Object.entries(TARGET_INFO).map(([k, t]) => `<option value="${k}" ${k === state.target ? "selected" : ""} title="${t.example}">${t.label}</option>`).join("")}</select></div>`;
+}
+function bindTarget() { $("#target").onchange = (e) => { state.target = e.target.value; briefChanged(); renderCanvas(); renderDock(); renderStatus(); }; }
 function renderFormsBar(ob) {
-  ob.innerHTML = `<div class="opt" id="opt-mount"><div class="segd" role="group" aria-label="How the piece is installed">
+  ob.innerHTML = `${targetSelect()}<span class="divider"></span><div class="opt" id="opt-mount"><div class="segd" role="group" aria-label="How the piece is installed">
       <button data-mount="standing" aria-pressed="${state.fMount === "standing"}">Freestanding</button><button data-mount="hanging" aria-pressed="${state.fMount === "hanging"}">Hanging</button></div></div>
     <span class="divider"></span>
     ${materialPicker("f-mat-pick")}
     <span class="divider"></span>
     <div class="opt" id="opt-form-size"><label for="f-size">Size</label><input type="range" id="f-size" min="0.4" max="2" step="0.1" value="${state.fSize}"><output id="f-size-out">${fix(state.fSize, 1)} m</output>
-      <label for="f-budget" title="How much soft material one piece may use">Budget per piece</label><input type="range" id="f-budget" min="0.5" max="15" step="0.5" value="${state.fBudget}"><output id="f-budget-out">${state.fBudget} kg</output></div>
+      <label for="f-budget" title="How much soft material one piece may use">Per piece</label><input type="range" id="f-budget" min="0.5" max="15" step="0.5" value="${state.fBudget}"><output id="f-budget-out">${state.fBudget} kg</output></div>
     <span class="spacer"></span>
-    <button class="btn primary" id="btn-grow-forms" ${state.fGrowing ? "disabled" : ""}>${state.fGrowing ? "Growing…" : state.fRule === "all" ? "Grow all natural rules" : state.fRule === "allsheets" ? "Grow all sheet hybrids" : "Grow " + G.RULES[state.fRule].name.toLowerCase()}</button>`;
+    <button class="btn primary" id="btn-grow-forms" ${state.fGrowing ? "disabled" : ""}>${state.fGrowing ? "Growing…" : state.fRule === "all" ? "Grow natural forms" : state.fRule === "allsheets" ? "Grow sheet hybrids" : state.fRule === "membrane" ? "Grow membrane" : "Grow " + G.RULES[state.fRule].name.toLowerCase()}</button>`;
   $$("[data-mount]").forEach((b) => b.onclick = () => { state.fMount = b.dataset.mount; renderFormsBar(ob); renderFormsCanvas(); renderStatus(); });
-  $("#f-mat-pick").onchange = (e) => { state.matPick = e.target.value; renderStatus(); renderDock(); };
+  $("#f-mat-pick").onchange = (e) => { state.matPick = e.target.value; briefChanged(); renderStatus(); renderDock(); };
+  bindTarget();
   $("#f-size").oninput = (e) => { state.fSize = Number(e.target.value); $("#f-size-out").textContent = fix(state.fSize, 1) + " m"; };
   $("#f-budget").oninput = (e) => { state.fBudget = Number(e.target.value); $("#f-budget-out").textContent = state.fBudget + " kg"; };
   $("#btn-grow-forms").onclick = growForms;
@@ -2719,10 +2733,11 @@ function renderFormsCanvas() {
   const c = $("#canvas"), f = state.fLive || selForm(), growing = !!state.fLive;
   if (!f) {
     FormView.detach(); FormWave.stop();
-    c.innerHTML = `<div class="artboard"><div class="card-head"><h2>Grow forms in space</h2><span class="muted">Not panels: free objects, the way nature would answer</span></div>
-      <p>Pick a growth rule in the toolbar (or all five), choose <strong>Hanging</strong> or <strong>Standing</strong>, set the size and how much material one piece may use, then press <strong>Grow</strong>.
-      Every candidate is tested by sending sound waves through a room with the form in it. Evolution keeps the forms that make the sound die away fastest.</p>
-      ${[["Natural growth", NATURAL], ["Sheet hybrids: felt sheets arranged by nature", HYBRID], ["Sound-grown, after Biothing's Genware", ["membrane"]]].map(([title, keys]) => `<h3>${title}</h3><div class="art-grid">${keys.map((k) => `<button class="art-card" data-rule-pick="${k}"><div class="row"><strong>${G.RULES[k].name}</strong><span class="pill">${icon(k)}</span></div>
+    c.innerHTML = `<div class="artboard"><div class="card-head"><h2>Natural structures</h2><span class="muted">Every generator in one place: pick one, set the bar above, press Grow</span></div>
+      <p>Free forms are tested by sending sound waves through a room with the form in it; surface textures by porous-layer physics. Evolution keeps what absorbs most within your material budget, and freestanding pieces must stand safely.</p>
+      <h3>Surface textures: grown as panels and screens</h3><div class="art-grid">${E.FAMILIES.map((fm) => `<button class="art-card" data-rule-pick="${fm.key}"><div class="row"><strong>${fm.name}</strong><span class="pill">${icon(fm.key)}</span></div>
+        <span class="muted">Imitates ${fm.imitates}</span><span>${fm.idea}</span></button>`).join("")}</div>
+      ${[["Natural growth: free forms", NATURAL], ["Sheet hybrids: felt sheets arranged by nature", HYBRID], ["Sound-grown, after Biothing's Genware", ["membrane"]]].map(([title, keys]) => `<h3>${title}</h3><div class="art-grid">${keys.map((k) => `<button class="art-card" data-rule-pick="${k}"><div class="row"><strong>${G.RULES[k].name}</strong><span class="pill">${icon(k)}</span></div>
         <span class="muted">Imitates ${G.RULES[k].imitates}</span><span>${G.RULES[k].idea}</span></button>`).join("")}</div>`).join("")}
       <p class="hint">Freestanding pieces grow a holdfast (splayed roots or a weighted plinth) and must pass a tipping test: they have to lean at least ${G.MIN_TIP_ANGLE}° before toppling.</p></div>`;
     return;
@@ -2755,7 +2770,7 @@ function renderFormsCanvas() {
     $("#wave-replay").onclick = () => FormWave.replay(f, state.fBand);
   }
 }
-$("#canvas").addEventListener("click", (e) => { const b = e.target.closest("[data-rule-pick]"); if (b) { state.fRule = b.dataset.rulePick; renderTools(); renderOptbar(); renderDock(); } });
+$("#canvas").addEventListener("click", (e) => { const b = e.target.closest("[data-rule-pick]"); if (b) setTool(b.dataset.rulePick); });
 
 function formsPropsPanel() {
   const f = selForm();
@@ -2781,17 +2796,21 @@ function formsPropsPanel() {
 function formsLayersPanel() {
   const list = state.forms.slice().sort((a, b) => b.fitness - a.fitness);
   const nSeeds = Object.values(state.seeds).reduce((a, l) => a + l.length, 0);
-  return `<details class="panel" open id="panel-forms"><summary>Grown forms</summary><div class="panel-body">
+  return `<details class="panel" ${gmode() === "forms" || state.forms.length ? "open" : ""} id="panel-forms"><summary>Grown free forms</summary><div class="panel-body">
     <p class="hint">Seed library: ${nSeeds ? `${nSeeds} seed${nSeeds === 1 ? "" : "s"}. New growth starts from them, so what grows feeds back into what grows next. <button class="chip" id="seeds-clear">Clear</button>` : "empty. Add forms you like (Properties) and growth will start from them."}</p>
     ${list.map((f) => `<button class="layer" data-form-pick="${f.id}" aria-pressed="${state.formSel === f.id}">
       <span class="thumb rule-thumb">${icon(f.rule)}</span><span><strong>${esc(f.name)}</strong><small>${f.mount} · ${fix(f.mass, 1)} kg · ${esc(E.FELTS[f.material].name)}</small></span>
       <span class="mono">${fix(f.score, 2)} m²</span></button>`).join("") || '<p class="hint">Nothing grown yet. Press Grow in the options bar.</p>'}</div></details>`;
 }
 function bindFormsDock() {
-  $$("[data-form-pick]").forEach((b) => b.onclick = () => { state.formSel = Number(b.dataset.formPick); renderFormsCanvas(); renderDock(); });
+  $$("[data-form-pick]").forEach((b) => b.onclick = () => {
+    state.formSel = Number(b.dataset.formPick);
+    const f = selForm();
+    if (gmode() !== "forms" || (state.gtool === "membrane") !== (f.rule === "membrane")) setTool(f.rule); else { renderFormsCanvas(); renderDock(); }
+  });
   if ($("#seeds-clear")) $("#seeds-clear").onclick = () => { state.seeds = {}; renderDock(); };
   const f = selForm();
-  if (!f) return;
+  if (!f || gmode() !== "forms") return;
   if ($("#form-obj")) $("#form-obj").onclick = (e) => saveFile(`biothing-${f.rule}-${f.id}.obj`, formOBJ(f), e.target);
   $("#form-seed").onclick = () => {
     const lib = (state.seeds[f.rule] = state.seeds[f.rule] || []);
@@ -3007,6 +3026,7 @@ const FormWave = (() => {
 // --------------------------------------------------------------- genware ---
 // Sound-grown membranes, after Biothing's Genware: a sound becomes a structural field that grows
 // a cellular membrane. Three sources: the target sound, a sound file, or a room's own resonances.
+ICONS.allsurf = '<rect x="2" y="4" width="16" height="4" rx="1"/><path d="M3 12 L6 16 L9 12 L12 16 L15 12 L17 15"/>';
 ICONS.membrane = '<path d="M2 9 C4 3 6 3 8 9 S12 15 14 9 S18 3 18 9"/><path d="M3 16 H17"/>';
 state.gw = { source: "target", spaceId: null, file: null, field: null, key: "", busy: false };
 state.seeds = {}; // Genware's "library of seeds": genomes the designer keeps, per growth rule
@@ -3053,7 +3073,7 @@ async function computeField() {
     state.gw.busy = false;
   }
   renderDock();
-  if (!selMembrane() && state.ws === "forms") renderFormsCanvas();
+  if (!selMembrane() && gmode() === "forms") renderFormsCanvas();
   return state.gw.field;
 }
 
@@ -3129,7 +3149,7 @@ async function loadSound(file) {
     state.gw.busy = false;
   }
   renderDock();
-  if (state.ws === "forms") renderFormsCanvas();
+  if (gmode() === "forms") renderFormsCanvas();
 }
 
 // Heat map of a field (dark = calm air, yellow = where the air moves most), with membrane cells on top.
@@ -3177,7 +3197,7 @@ function soundPanel() {
   if (state.fRule !== "membrane") return "";
   const g = state.gw, room = gwRoom(), fl = g.file, ready = g.field && g.key === gwKey();
   return `<details class="panel" open id="panel-sound"><summary>Sound source</summary><div class="panel-body">
-    <label class="matrow"><input type="radio" name="gw-src" value="target" ${g.source === "target" ? "checked" : ""}><span>Target sound<small>${TARGET_INFO[state.target].label} (set it in the Shapes workspace)</small></span><span></span></label>
+    <label class="matrow"><input type="radio" name="gw-src" value="target" ${g.source === "target" ? "checked" : ""}><span>Target sound<small>${TARGET_INFO[state.target].label} (set it under Quiet in the options bar)</small></span><span></span></label>
     <label class="matrow"><input type="radio" name="gw-src" value="file" ${g.source === "file" ? "checked" : ""} ${fl ? "" : "disabled"}><span>A sound file<small>${fl ? `${esc(fl.name)} · ${fl.bpm ? Math.round(fl.bpm) + " BPM" : "no clear beat"}` : "a recording of your hall, voices or music"}</small></span><span></span></label>
     <div class="chips"><button class="chip" id="gw-file-btn">${fl ? "Choose another file…" : "Choose sound file…"}</button><input type="file" id="gw-file" accept="audio/*" hidden></div>
     ${fl ? bandsMini(fl.bands) : ""}
@@ -3211,7 +3231,7 @@ function drawMembraneCard(f) {
 // ------------------------------------------------------------- status bar --
 function renderStatus() {
   const s = $("#status");
-  if (state.ws === "forms") {
+  if (gmode() === "forms") {
     s.innerHTML = `${state.fGrowing ? `<span>Growing and testing</span><span class="progress"><i style="width:${state.fProgress * 100}%"></i></span>` : `<span>${state.forms.length} forms grown</span>`}
       <span>${state.fMount === "standing" ? "freestanding" : "hanging"}</span><span class="mono">${fix(state.fSize, 1)} m · ${state.fBudget} kg</span><span>${state.matPick === "auto" ? `best of ${state.porous.size} materials` : esc(E.FELTS[state.matPick].name)}</span><span>Wave simulator: 2D slices at 250, 500 and 1000 Hz</span>`;
     return;
@@ -3228,7 +3248,7 @@ function renderStatus() {
 
 // ------------------------------------------------------------------ guide --
 const TIPS = {
-  shapes: { text: "Set what to quiet, the <strong>depth</strong> and the <strong>material budget</strong> in the bar above, then press <strong>Grow shapes</strong>. Pick any shape to inspect it.",
+  shapes: { text: "Surface textures: set what to quiet, the <strong>depth</strong> and the <strong>budget</strong> in the bar above, then press <strong>Grow</strong>. Free forms are further down the toolbar.",
     chips: ["Why did this shape win?", "How deep should it be?", "How would I make it?"] },
   forms: { text: "Pick a <strong>growth rule</strong> (natural, sheet hybrids, or the sound-grown membrane) in the toolbar and a <strong>material</strong> in the bar above, then press <strong>Grow</strong>. Freestanding pieces must pass a tipping test; every candidate is tested with sound waves.",
     chips: ["Which form works best?", "Why does thickness matter?", "How would I make this form?"] },
@@ -3238,13 +3258,13 @@ const TIPS = {
     chips: ["Is my space too echoey?", "How many m² do I need?", "Where should absorbers go?"] },
 };
 function renderGuideTip() {
-  const t = TIPS[state.ws];
+  const t = TIPS[gmode()];
   $("#guide-tip").innerHTML = t.text;
   $("#ask-chips").innerHTML = t.chips.map((c) => `<button class="chip" type="button" data-ask="${esc(c)}">${esc(c)}</button>`).join("");
 }
 document.addEventListener("click", (e) => { const c = e.target.closest("[data-ask]"); if (c) ask(c.dataset.ask); });
 
-const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing): panel-like shapes in the Shapes workspace, and free objects in the Forms workspace. The product must be freestanding: standing forms grow a holdfast (splayed roots or a plinth) and must lean 10 degrees before toppling. Forms come from natural rules (branching tree, snow crystal, folding coral, spiral shell, foam) or sheet hybrids (felt sheets arranged as a leaf canopy, mushroom gills, pine cone or twisted lamellae), or the Sound-grown membrane after Biothing's Genware (a sound source, either the target sound, an uploaded recording or a room's resonances, becomes a field of air motion; a cellular felt membrane grows denser where air moves most and the field is updated by what has grown over three rounds). A seed library keeps genomes the designer likes and starts new growth from them (after Malafouris's essay on Genware as a "library of seeds" changed by what grows). Everything is tested in a 2D wave simulator that reads about 25% conservative. It also compares materials, and tests everything in 3D models of exhibition spaces. The person is a designer, not an acoustic engineer.
+const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing): all of them in one Structures workspace: surface textures (panel-like families) and free objects. The product must be freestanding: standing forms grow a holdfast (splayed roots or a plinth) and must lean 10 degrees before toppling. Forms come from natural rules (branching tree, snow crystal, folding coral, spiral shell, foam) or sheet hybrids (felt sheets arranged as a leaf canopy, mushroom gills, pine cone or twisted lamellae), or the Sound-grown membrane after Biothing's Genware (a sound source, either the target sound, an uploaded recording or a room's resonances, becomes a field of air motion; a cellular felt membrane grows denser where air moves most and the field is updated by what has grown over three rounds). A seed library keeps genomes the designer likes and starts new growth from them (after Malafouris's essay on Genware as a "library of seeds" changed by what grows). Everything is tested in a 2D wave simulator that reads about 25% conservative. It also compares materials, and tests everything in 3D models of exhibition spaces. The person is a designer, not an acoustic engineer.
 How to answer:
 - Simple, everyday words; explain any technical word in a few words the first time.
 - Short: at most about 120 words unless asked for more. Short paragraphs or a few bullets.
@@ -3252,13 +3272,13 @@ How to answer:
 - The numbers come from simplified physics (porous-material, resonator and tube models; Sabine reverberation). Good for comparing ideas; real objects and rooms should be tested. Mention this only when it matters.
 - Answer in the language the person writes in.`;
 function pageState() {
-  const lines = [`Workspace: ${state.ws}`, `Target: ${TARGET_INFO[state.target].label} (${TARGET_INFO[state.target].example})`,
+  const lines = [`Workspace: ${state.ws === "grow" ? `Structures (one workspace for all generators), now on ${gmode() === "shapes" ? "a surface texture" : "a free form"}, tool ${state.gtool}` : state.ws}`, `Target: ${TARGET_INFO[state.target].label} (${TARGET_INFO[state.target].example})`,
     `Depth: ${state.depth} mm (soft layers catch above ~${hz(E.quarterWave(state.depth))}); material budget ${state.mass} kg/m2; hanging allowed: ${state.hang ? "yes" : "no"}`,
     `Soft materials: ${[...state.porous].map((k) => E.FELTS[k].name).join(", ") || "none"}`,
     `Hard materials: ${[...state.rigid].map((k) => E.RIGIDS[k].name).join(", ")}`,
     state.results ? "Shapes (grown):" : "Shapes (seeds, not grown yet):"];
   for (const f of families()) { const r = current(f.key); if (r) lines.push(`- ${f.name}: ${scoreText(r)}; ${explain(r).join(" ")}`); }
-  if (state.ws === "shapes" && state.tool !== "all") lines.push(`Inspecting: ${E.FAMILY[state.tool].name}`);
+  if (gmode() === "shapes" && state.tool !== "all") lines.push(`Inspecting: ${E.FAMILY[state.tool].name}`);
   lines.push(`Sound source for membranes: ${gwLabel()}${state.gw.field ? " (field computed)" : ""}${state.gw.file ? `; file ${state.gw.file.name}, ${Math.round(state.gw.file.bpm)} BPM` : ""}; seed library: ${Object.entries(state.seeds).map(([k, l]) => `${l.length} ${k}`).join(", ") || "empty"}`);
   lines.push(`Forms settings: ${state.fMount === "standing" ? "freestanding" : "hanging"}, size ${state.fSize} m, material per piece ${state.fBudget} kg, rule ${state.fRule}; material choice: ${state.matPick === "auto" ? "best of the ticked materials" : E.FELTS[state.matPick].name}`);
   for (const f of state.forms) lines.push(`- Form "${f.name}"${f.id === state.formSel ? " (selected)" : ""}: ${f.mount}, ${G.RULES[f.rule].describe(f.genes)} ${E.FELTS[f.material].name}, ${fix(f.mass, 1)} kg; absorption ${f.area.map((a) => fix(a, 2)).join("/")} m2 at 250/500/1000 Hz; ${fix(f.perKg, 2)} m2 per kg${f.stance ? `; freestanding on ${stanceText(f)}, tips at ${fix(f.stance.angle, 0)} degrees (${f.stance.ok ? "stable" : "unstable"})` : ""}${f.baseline ? `; flat panel with the same kg: ${f.baseline.map((a) => fix(a, 2)).join("/")} m2` : ""}`);
@@ -3307,19 +3327,17 @@ $("#ask-stop").addEventListener("click", () => ctl && ctl.abort());
 
 // ------------------------------------------------------------------- tour --
 const TOUR = [
-  { ws: "shapes", sel: "#ws-tabs", title: "Four workspaces", text: "Shapes grows panel-like absorbers, Forms grows free objects the way nature would, Materials compares materials, Spaces tests everything in 3D models of your exhibition areas." },
-  { ws: "shapes", sel: "#opt-target", title: "1. What to quiet", text: "Choose the noise you care about. Exhibition mix balances voices and crowd." },
-  { ws: "shapes", sel: "#opt-space", title: "2. Depth and budget", text: "Depth decides which pitches can be caught: low pitches need depth. The budget limits how much material each shape may use. Pick the material itself in the Material menu." },
-  { ws: "shapes", sel: "#btn-grow", title: "3. Grow", text: "Every nature-inspired family evolves under the same limits: many variations, keep the best, mix, repeat." },
-  { ws: "shapes", sel: "#tools", title: "4. Tools = shape families", text: "Each tool is one family: spikes, sponge, cloud, bottles, coils, moss-on-shell. Click one to inspect it on the artboard." },
-  { ws: "shapes", sel: "#panel-layers", title: "5. Layers", text: "The grown shapes, ranked. Click any to open it; Properties explains it in plain words." },
-  { ws: "forms", sel: "#tools", title: "6. Forms: growth rules", text: "Not panels: free objects. Each tool is a rule from nature: branching tree, snow crystal, folding coral, spiral shell, foam." },
-  { ws: "forms", sel: "#opt-mount", title: "7. Freestanding", text: "Freestanding pieces grow a holdfast (roots or a plinth) and must lean at least 10° before toppling. Pick the material, size and material per piece, then press Grow." },
-  { ws: "forms", rule: "membrane", sel: "#panel-sound", title: "8. Sound draws the form", text: "After Biothing's Genware: choose a sound (your target, a recording, or a room's resonances). Where the air moves most, the membrane grows denser. Keep forms you like in the seed library: new growth starts from them." },
-  { ws: "materials", sel: "#panel-materials", title: "9. Materials", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
-  { ws: "spaces", sel: "#panel-spaces", title: "10. Your spaces", text: "Each exhibition area is its own 3D model. Add a ready-made room, or import an OBJ from Rhino, SketchUp or Blender." },
-  { ws: "spaces", sel: "#panel-absorbers", title: "11. Place absorbers", text: "Add grown shapes to the space. The lab tells you how many m² reach the recommended echo, and how much the crowd noise drops." },
-  { ws: "spaces", sel: "#panel-guide", title: "12. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
+  { ws: "grow", tool: "all", sel: "#ws-tabs", title: "Three workspaces", text: "Structures grows natural structures, Materials compares materials, Spaces tests everything in 3D models of your exhibition areas." },
+  { ws: "grow", tool: "all", sel: "#tools", title: "1. One toolbar, every generator", text: "From the top: surface textures (panels and screens), natural growth (tree, snow, coral, shell, foam), felt-sheet hybrids, and at the bottom the sound-grown membrane." },
+  { ws: "grow", tool: "all", sel: "#opt-target", title: "2. What to quiet", text: "Choose the noise you care about, and the material in the menu next to it: one material, or the best of the ones you ticked." },
+  { ws: "grow", tool: "all", sel: "#opt-mount", title: "3. Freestanding", text: "Free forms grow a holdfast (roots, feet or a plinth) and must lean at least 10° before toppling. Set the size and the budget per piece, then press Grow." },
+  { ws: "grow", tool: "allsurf", sel: "#opt-space", title: "4. The bar follows the tool", text: "For surface textures it asks for depth and budget per m² instead: depth decides which pitches can be caught." },
+  { ws: "grow", tool: "membrane", sel: "#panel-sound", title: "5. Sound draws the form", text: "After Biothing's Genware: choose a sound (your target, a recording, or a room's resonances). Where the air moves most, the membrane grows denser. Keep forms you like in the seed library." },
+  { ws: "grow", tool: "all", sel: "#panel-forms", title: "6. Everything you grow", text: "Grown free forms and surface textures are listed in the panels on the right. Click any to open it; Properties explains it in plain words." },
+  { ws: "materials", sel: "#panel-materials", title: "7. Materials", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
+  { ws: "spaces", sel: "#panel-spaces", title: "8. Your spaces", text: "Each exhibition area is its own 3D model. Add a ready-made room, or import an OBJ from Rhino, SketchUp or Blender." },
+  { ws: "spaces", sel: "#panel-absorbers", title: "9. Place absorbers", text: "Add grown structures to the space. The lab tells you how much reaches the recommended echo, and how much the crowd noise drops." },
+  { ws: "spaces", sel: "#panel-guide", title: "10. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
 ];
 let tourAt = -1;
 function tour(i) {
@@ -3328,8 +3346,8 @@ function tour(i) {
   if (i < 0 || i >= TOUR.length) { box.hidden = true; tourAt = -1; return; }
   tourAt = i;
   const step = TOUR[i];
-  if (step.rule && state.fRule !== step.rule) { state.fRule = step.rule; if (state.ws === step.ws) renderAll(); }
   if (state.ws !== step.ws) setWorkspace(step.ws);
+  if (step.tool && state.gtool !== step.tool) setTool(step.tool);
   const target = $(step.sel);
   box.innerHTML = `<span class="kicker">Guided tour · ${i + 1} of ${TOUR.length}</span><h3>${step.title}</h3><p>${step.text}</p>
     <div class="row"><button class="btn small ghost" id="tour-end">Close</button><span><button class="btn small" id="tour-back" ${i === 0 ? "disabled" : ""}>Back</button>
@@ -3360,6 +3378,6 @@ renderAll();
 addMsg("bot", "Hi! I'm your guide. New here? Press “Guided tour” at the top right, or just ask me anything.");
 if (window.claude && window.claude.use) {
   window.claude.use("sample").then((s) => { sample = s; });
-  window.claude.use("downloads").then((d) => { downloads = d; if (state.ws === "shapes" && state.tool !== "all") renderDock(); });
+  window.claude.use("downloads").then((d) => { downloads = d; if (gmode() === "shapes" && state.tool !== "all") renderDock(); });
 }
 </script>

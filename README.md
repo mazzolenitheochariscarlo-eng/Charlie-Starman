@@ -21,7 +21,7 @@ one-person module mass, flat-pack transport and reuse across many events.
 
 ## Biothing Sound Lab (web app)
 
-`webapp/` holds a browser app laid out like a creative-suite tool, with three workspaces:
+`webapp/` holds a browser app laid out like a creative-suite tool. One **Structures** workspace holds every generator (surface textures and free forms below), next to **Materials** and **Spaces**:
 
 - **Shapes**: six nature-inspired absorber families (spikes, gradient sponge, hanging cloud,
   bottle resonators, coiled channels, moss-on-a-shell) evolve under the same depth and
