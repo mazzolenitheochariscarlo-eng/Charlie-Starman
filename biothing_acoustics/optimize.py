@@ -24,11 +24,7 @@ def _tournament(rng, fitness, k=3):
 
 
 def run(brief, population=40, generations=30, seed=1, mutation_rate=0.15, elite=2, progress=None):
-    rng = np.random.default_rng(seed)
-    n_genes = len(GENES)
-    pop = rng.uniform(size=(population, n_genes))
     archive = {}
-    history = []
 
     def assess(vector):
         screen = decode(vector, brief)
@@ -36,6 +32,16 @@ def run(brief, population=40, generations=30, seed=1, mutation_rate=0.15, elite=
             archive[screen] = evaluate(screen, brief)
         return archive[screen].fitness
 
+    history = evolve(assess, len(GENES), population, generations, seed, mutation_rate, elite, progress)
+    ranked = sorted(archive.values(), key=lambda e: e.fitness, reverse=True)
+    return Result(ranked, history)
+
+
+def evolve(assess, n_genes, population=40, generations=30, seed=1, mutation_rate=0.15, elite=2, progress=None):
+    """Generic GA over vectors in [0, 1]^n_genes; `assess` returns a fitness to maximise."""
+    rng = np.random.default_rng(seed)
+    pop = rng.uniform(size=(population, n_genes))
+    history = []
     for gen in range(generations + 1):
         fitness = np.array([assess(v) for v in pop])
         history.append((gen, float(fitness.max()), float(fitness.mean())))
@@ -55,9 +61,7 @@ def run(brief, population=40, generations=30, seed=1, mutation_rate=0.15, elite=
             child = np.where(reset, rng.uniform(size=n_genes), child)
             children.append(child)
         pop = np.array(children)
-
-    ranked = sorted(archive.values(), key=lambda e: e.fitness, reverse=True)
-    return Result(ranked, history)
+    return history
 
 
 def distinct(ranked, n=3):

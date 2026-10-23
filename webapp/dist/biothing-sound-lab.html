@@ -1,0 +1,1658 @@
+<title>Biothing Sound Lab</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&family=Source+Code+Pro:wght@400;500&display=swap">
+<style>
+/* Layout: a creative-suite workspace. App bar and options bar on top, tools on the left,
+   artboard or 3D viewport in the middle, docked panels on the right, status bar below.
+   Deliberately one dark theme, like the design tools it borrows from. */
+:root {
+  --app: #1b1c1e; --panel: #26272a; --panel-2: #2e3034; --raised: #383a40; --line: #3e4147;
+  --ink: #e9e9ea; --muted: #a2a5ab; --accent: #4a90e2; --accent-ink: #ffffff; --signal: #e6a23c;
+  --good: #5bb67c; --warn: #e3b448; --bad: #e46b5f; --pasteboard: #141517; --artboard: #f3f3f1; --art-ink: #1d1e20;
+  --sans: "Source Sans 3", "Segoe UI", system-ui, sans-serif; --mono: "Source Code Pro", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { background: var(--app); color: var(--ink); font: 14px/1.45 var(--sans); }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+h1, h2, h3, h4 { margin: 0; line-height: 1.2; text-wrap: balance; }
+p { margin: 0; }
+.muted { color: var(--muted); }
+.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.kicker { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+
+.app { height: 100%; display: grid; grid-template-columns: 48px minmax(0, 1fr) 340px; grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas: "bar bar bar" "opt opt opt" "tools canvas dock" "status status status";
+  padding-left: max(0px, env(safe-area-inset-left, 0px)); padding-right: max(0px, env(safe-area-inset-right, 0px)); }
+
+/* App bar */
+.appbar { grid-area: bar; display: flex; align-items: center; gap: 14px; padding: 6px 12px; background: var(--app); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.mark { width: 26px; height: 26px; border-radius: 6px; background: linear-gradient(135deg, var(--good), var(--accent)); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 13px; }
+.appname { font-weight: 700; font-size: 15px; }
+.tabs { display: flex; gap: 2px; background: var(--panel); border-radius: 8px; padding: 3px; }
+.tabs button { border: 0; background: transparent; padding: 5px 14px; border-radius: 6px; cursor: pointer; color: var(--muted); font-weight: 600; }
+.tabs button[aria-selected="true"] { background: var(--raised); color: var(--ink); }
+.spacer { flex: 1; }
+.btn { border: 1px solid var(--line); background: var(--panel-2); border-radius: 6px; padding: 6px 12px; cursor: pointer; font-weight: 600; white-space: nowrap; }
+.btn:hover { background: var(--raised); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.primary:hover { filter: brightness(1.08); }
+.btn.ghost { background: transparent; }
+.btn.small { padding: 3px 9px; font-size: 13px; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+
+/* Options bar */
+.optbar { grid-area: opt; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; padding: 7px 12px; background: var(--panel); border-bottom: 1px solid var(--line); min-width: 0; }
+.opt { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.opt label { color: var(--muted); white-space: nowrap; }
+.opt output { font-family: var(--mono); min-width: 74px; }
+select, input[type="number"], input[type="text"] { background: var(--app); border: 1px solid var(--line); border-radius: 5px; padding: 4px 8px; }
+input[type="range"] { accent-color: var(--accent); width: 130px; }
+input[type="checkbox"] { accent-color: var(--accent); }
+.divider { width: 1px; align-self: stretch; background: var(--line); }
+
+/* Tools */
+.tools { grid-area: tools; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; }
+.tool { width: 36px; height: 36px; border-radius: 6px; border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; color: var(--muted); position: relative; }
+.tool:hover { background: var(--panel-2); color: var(--ink); }
+.tool[aria-pressed="true"] { background: var(--raised); color: var(--ink); box-shadow: inset 2px 0 0 var(--accent); }
+.tool svg { width: 20px; height: 20px; }
+.tool-sep { width: 24px; height: 1px; background: var(--line); margin: 4px 0; }
+
+/* Canvas */
+.canvas { grid-area: canvas; background: var(--pasteboard); overflow: auto; min-width: 0; min-height: 0; padding: 18px; display: grid; gap: 14px; align-content: start; }
+.artboard { background: var(--artboard); color: var(--art-ink); border-radius: 2px; box-shadow: 0 2px 18px rgba(0, 0, 0, 0.45); padding: 16px; display: grid; gap: 10px; }
+.artboard .muted { color: #5e6168; }
+.artboard h2 { font-size: 20px; }
+.art-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
+.art-card { border: 1px solid #d7d8da; border-radius: 4px; background: #fff; padding: 10px; display: grid; gap: 6px; text-align: left; cursor: pointer; color: var(--art-ink); }
+.art-card:hover { border-color: var(--accent); }
+.art-card svg { width: 100%; height: auto; display: block; }
+.art-card .row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.pill { font-family: var(--mono); font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #e7e8ea; color: #4b4e55; white-space: nowrap; }
+.pill.win { background: #dbe9fb; color: #1f5fae; }
+.pill.hang { background: #fbeed8; color: #8a5a10; }
+.pill.seed { background: #ececec; color: #777; }
+.big-drawing svg { width: 100%; max-width: 760px; height: auto; display: block; margin: 0 auto; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.chart-scroll { overflow-x: auto; }
+.chart-scroll svg { display: block; width: 100%; min-width: 420px; height: auto; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.legend i.box { height: 10px; width: 10px; }
+.table-wrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 600; }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+tr.current td { background: var(--panel-2); }
+.status-pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; font-weight: 600; }
+.status-pill.ok { background: rgba(91, 182, 124, 0.18); color: var(--good); }
+.status-pill.warn { background: rgba(227, 180, 72, 0.18); color: var(--warn); }
+.status-pill.bad { background: rgba(228, 107, 95, 0.18); color: var(--bad); }
+.viewport { position: relative; height: min(56vh, 520px); min-height: 300px; background: #0f1012; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; touch-action: none; }
+.viewport canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+.viewport .hud { position: absolute; left: 10px; top: 8px; font-size: 12px; color: var(--muted); pointer-events: none; }
+.viewport .fallback { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; text-align: center; color: var(--muted); }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; display: grid; gap: 2px; }
+.kpi b { font-family: var(--mono); font-size: 20px; font-weight: 500; }
+
+/* Dock */
+.dock { grid-area: dock; background: var(--panel); border-left: 1px solid var(--line); display: grid; grid-template-rows: minmax(0, 1fr) minmax(250px, 44%); min-height: 0; min-width: 0; }
+.dock-panels { overflow-y: auto; min-height: 0; }
+details.panel { border-bottom: 1px solid var(--line); }
+details.panel > summary { list-style: none; cursor: pointer; padding: 8px 12px; background: var(--panel-2); font-weight: 700; font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; display: flex; justify-content: space-between; }
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary::after { content: "▾"; color: var(--muted); }
+details.panel:not([open]) > summary::after { content: "▸"; }
+.panel-body { padding: 10px 12px 14px; display: grid; gap: 10px; }
+.hint { color: var(--muted); font-size: 13px; }
+ul.plain { margin: 0; padding-left: 1.1em; display: grid; gap: 4px; }
+dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+dl.facts dt { color: var(--muted); }
+dl.facts dd { margin: 0; font-family: var(--mono); }
+.layer { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; align-items: center; padding: 6px; border-radius: 6px; border: 1px solid transparent; background: transparent; text-align: left; cursor: pointer; width: 100%; }
+.layer:hover { background: var(--panel-2); }
+.layer[aria-pressed="true"] { border-color: var(--accent); background: var(--panel-2); }
+.layer .thumb { background: var(--artboard); border-radius: 3px; overflow: hidden; }
+.layer .thumb svg { width: 64px; height: 40px; display: block; }
+.layer small { color: var(--muted); display: block; }
+.matrow { display: grid; grid-template-columns: auto 1fr auto; gap: 8px; align-items: start; padding: 5px 2px; cursor: pointer; }
+.matrow small { display: block; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--line); background: var(--panel-2); border-radius: 999px; padding: 2px 10px; cursor: pointer; font-size: 12.5px; }
+.chip:hover { border-color: var(--accent); }
+.bars { display: grid; gap: 5px; }
+.bar-row { display: grid; grid-template-columns: minmax(0, 1fr) 90px 44px; gap: 8px; align-items: center; font-size: 12.5px; }
+.bar-row span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-row .track { height: 8px; background: var(--app); border-radius: 999px; overflow: hidden; }
+.bar-row .track i { display: block; height: 100%; background: var(--signal); }
+.formgrid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: center; }
+.formgrid select, .formgrid input { width: 100%; min-width: 0; }
+.placement { display: grid; grid-template-columns: minmax(0, 1fr) 76px auto; gap: 6px; align-items: center; }
+.suggest { border: 1px dashed var(--accent); border-radius: 6px; padding: 8px 10px; display: grid; gap: 6px; }
+.space-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; border: 1px solid transparent; cursor: pointer; background: transparent; width: 100%; text-align: left; }
+.space-item:hover { background: var(--panel-2); }
+.space-item[aria-pressed="true"] { border-color: var(--accent); background: var(--panel-2); }
+
+/* Guide */
+.guide { border-top: 1px solid var(--line); display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; min-height: 0; background: var(--panel); }
+.guide-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--panel-2); }
+.guide-head .avatar { width: 22px; height: 22px; border-radius: 50%; background: var(--good); color: #0f1a13; display: grid; place-items: center; font-weight: 700; font-size: 12px; }
+.guide-head h3 { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; }
+.guide-tip { padding: 8px 12px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.guide-tip strong { color: var(--ink); }
+.log { overflow-y: auto; padding: 10px 12px; display: grid; gap: 8px; align-content: start; min-height: 0; }
+.msg { padding: 7px 10px; border-radius: 8px; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
+.msg.user { background: var(--raised); justify-self: end; }
+.msg.bot { background: var(--app); border: 1px solid var(--line); }
+.msg.note { color: var(--muted); font-size: 12.5px; padding: 0; }
+.ask { padding: 8px 10px 10px; display: grid; gap: 6px; border-top: 1px solid var(--line); }
+.ask form { display: flex; gap: 6px; }
+.ask textarea { flex: 1; min-width: 0; resize: none; height: 36px; background: var(--app); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+
+/* Status bar */
+.statusbar { grid-area: status; display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: center; padding: 4px 12px; background: var(--panel); border-top: 1px solid var(--line); font-size: 12px; color: var(--muted);
+  padding-bottom: max(4px, env(safe-area-inset-bottom, 0px)); }
+.progress { width: 120px; height: 5px; background: var(--app); border-radius: 999px; overflow: hidden; }
+.progress i { display: block; height: 100%; background: var(--accent); }
+
+/* Tour */
+.tour-focus { position: relative; z-index: 60; outline: 2px solid var(--signal) !important; outline-offset: 2px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55); border-radius: 6px; }
+.tour { position: fixed; z-index: 70; width: min(340px, calc(100vw - 32px)); background: var(--panel-2); border: 1px solid var(--signal); border-radius: 10px; padding: 14px; display: grid; gap: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); }
+.tour .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+
+@media (max-width: 900px) {
+  html, body { height: auto; }
+  .app { height: auto; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto;
+    grid-template-areas: "bar" "opt" "tools" "canvas" "dock" "status"; padding-left: 0; padding-right: 0; }
+  .appbar, .optbar, .statusbar { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+  .optbar select { max-width: 100%; }
+  input[type="range"] { width: auto; flex: 1 1 120px; }
+  .opt output { min-width: 0; }
+  .divider { display: none; }
+  .tools { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 4px max(16px, env(safe-area-inset-left, 0px)); }
+  .tool-sep { width: 1px; height: 24px; margin: 0 4px; }
+  .canvas { overflow: visible; padding: 14px max(16px, env(safe-area-inset-right, 0px)) 14px max(16px, env(safe-area-inset-left, 0px)); }
+  .dock { grid-template-rows: auto 460px; border-left: 0; border-top: 1px solid var(--line); }
+  .dock-panels { overflow: visible; }
+  .tour { left: 16px !important; right: 16px; bottom: max(16px, env(safe-area-inset-bottom, 0px)); top: auto !important; width: auto; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="app">
+  <header class="appbar">
+    <span class="mark" aria-hidden="true">Bt</span>
+    <span class="appname">Biothing Sound Lab</span>
+    <div class="tabs" role="tablist" id="ws-tabs" aria-label="Workspaces">
+      <button role="tab" data-ws="shapes" id="tab-shapes">Shapes</button>
+      <button role="tab" data-ws="materials" id="tab-materials">Materials</button>
+      <button role="tab" data-ws="spaces" id="tab-spaces">Spaces</button>
+    </div>
+    <span class="spacer"></span>
+    <button class="btn" id="tour-start">Guided tour</button>
+  </header>
+
+  <div class="optbar" id="optbar"></div>
+  <nav class="tools" id="tools" aria-label="Tools"></nav>
+  <main class="canvas" id="canvas"></main>
+
+  <aside class="dock" aria-label="Panels">
+    <div class="dock-panels" id="dock"></div>
+    <section class="guide" id="panel-guide" aria-label="Guide">
+      <div class="guide-head"><span class="avatar" aria-hidden="true">C</span><h3>Guide</h3><span class="spacer"></span><button class="btn small ghost" id="tour-start-2">Tour</button></div>
+      <div class="guide-tip" id="guide-tip"></div>
+      <div class="log" id="log" aria-live="polite"></div>
+      <div class="ask">
+        <div class="chips" id="ask-chips"></div>
+        <form id="ask-form">
+          <textarea id="ask-input" aria-label="Ask the guide" placeholder="Ask anything…" rows="1"></textarea>
+          <button class="btn primary" type="submit" id="ask-send">Ask</button>
+          <button class="btn" type="button" id="ask-stop" hidden>Stop</button>
+        </form>
+      </div>
+    </section>
+  </aside>
+
+  <footer class="statusbar" id="status"></footer>
+</div>
+<div class="tour" id="tour" role="dialog" aria-live="polite" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>/* Biothing Sound Lab engine: browser port of biothing_acoustics/layers.py and forms.py.
+ * Kept numerically identical to the Python version (checked by webapp/engine.test.js).
+ * Convention exp(+j*omega*t): lossy wavenumbers have a negative imaginary part. */
+(function (root) {
+  "use strict";
+
+  // ---------------------------------------------------------- complex ----
+  const C = (re, im = 0) => ({ re, im });
+  const add = (a, b) => C(a.re + b.re, a.im + b.im);
+  const sub = (a, b) => C(a.re - b.re, a.im - b.im);
+  const mul = (a, b) => C(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re);
+  const scale = (a, k) => C(a.re * k, a.im * k);
+  const div = (a, b) => {
+    const d = b.re * b.re + b.im * b.im;
+    return C((a.re * b.re + a.im * b.im) / d, (a.im * b.re - a.re * b.im) / d);
+  };
+  const inv = (a) => div(C(1), a);
+  const abs2 = (a) => a.re * a.re + a.im * a.im;
+  const csqrt = (a) => { // principal branch, like numpy
+    const r = Math.hypot(a.re, a.im);
+    const re = Math.sqrt((r + a.re) / 2);
+    const im = Math.sqrt(Math.max(0, (r - a.re) / 2));
+    return C(re, a.im < 0 ? -im : im);
+  };
+  const csin = (a) => C(Math.sin(a.re) * Math.cosh(a.im), Math.cos(a.re) * Math.sinh(a.im));
+  const ccos = (a) => C(Math.cos(a.re) * Math.cosh(a.im), -Math.sin(a.re) * Math.sinh(a.im));
+  const ctan = (a) => div(csin(a), ccos(a));
+  const ctanh = (a) => {
+    const d = Math.cosh(2 * a.re) + Math.cos(2 * a.im);
+    return C(Math.sinh(2 * a.re) / d, Math.sin(2 * a.im) / d);
+  };
+  const J = C(0, 1);
+
+  // --------------------------------------------------------- constants ----
+  const RHO0 = 1.204, C0 = 343.2, Z0 = RHO0 * C0;
+  const ETA = 1.81e-5, PRANDTL = 0.71, GAMMA = 1.4, K0 = RHO0 * C0 * C0;
+  const FREQS = [100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000];
+  const N_THETA = 46;
+  const THETA = Array.from({ length: N_THETA }, (_, i) => (i / (N_THETA - 1)) * (89 * Math.PI / 180));
+  const N_SUB = 14, WALL = 0.002, PARTITION_SPACING = 0.1;
+
+  // Paris weights: trapezoid of sin(2θ), normalised.
+  const PARIS = (() => {
+    const w = THETA.map((t) => Math.sin(2 * t));
+    const h = THETA[1] - THETA[0];
+    const tw = w.map((v, i) => v * h * (i === 0 || i === N_THETA - 1 ? 0.5 : 1));
+    const total = tw.reduce((a, b) => a + b, 0);
+    return tw.map((v) => v / total);
+  })();
+
+  // ---------------------------------------------------------- materials ---
+  // Indicative values; same table as biothing_acoustics/materials.py.
+  const FELTS = {
+    pet_felt_light: { name: "Recycled PET felt, light", sigma: 9000, density: 35, cost: 5.0, carbon: 1.6, group: "Recycled", formable: true, note: "Soft and very light. Made from plastic bottles; can be pressed into shapes." },
+    pet_felt_medium: { name: "Recycled PET felt, medium", sigma: 20000, density: 60, cost: 5.0, carbon: 1.6, group: "Recycled", formable: true, note: "The everyday acoustic felt. Can be heat-pressed into reliefs." },
+    pet_felt_dense: { name: "Recycled PET felt, dense", sigma: 45000, density: 120, cost: 5.5, carbon: 1.6, group: "Recycled", formable: true, note: "Tough surface, best at middle and high pitches." },
+    recycled_cotton: { name: "Recycled cotton fibre", sigma: 12000, density: 45, cost: 3.5, carbon: 0.8, group: "Recycled", formable: false, note: "From old clothes. Low carbon; needs fire treatment." },
+    wool_felt: { name: "Wool felt", sigma: 25000, density: 100, cost: 14.0, carbon: 10.0, group: "Animal", formable: false, note: "Dense natural felt, beautiful surface, expensive." },
+    sheep_wool_batt: { name: "Sheep wool batt", sigma: 6000, density: 25, cost: 8.0, carbon: 1.0, group: "Animal", formable: false, note: "Fluffy wool padding. Excellent absorber; needs a cover fabric." },
+    hemp_fibre: { name: "Hemp fibre mat", sigma: 8000, density: 40, cost: 4.0, carbon: 0.5, group: "Plant", formable: false, note: "Fast-growing plant, very low carbon, slightly rough look." },
+    coconut_coir: { name: "Coconut coir mat", sigma: 3000, density: 60, cost: 3.0, carbon: 0.4, group: "Plant", formable: false, note: "Coarse husk fibres. Very open: good as a front layer." },
+    cork_granulate: { name: "Bonded cork granulate", sigma: 15000, density: 110, cost: 6.0, carbon: 0.3, group: "Plant", formable: true, note: "Cork-oak bark, harvested without cutting the tree. Can be moulded." },
+    cellulose_fibre: { name: "Recycled paper cellulose", sigma: 20000, density: 45, cost: 1.5, carbon: 0.3, group: "Plant", formable: true, note: "Very cheap; can be moulded like papier-mache." },
+    wood_wool: { name: "Wood wool board", sigma: 1500, density: 400, cost: 1.5, carbon: 0.5, group: "Plant", formable: false, note: "Wood shavings bound with cement. Robust but heavy." },
+    mycelium: { name: "Mycelium composite", sigma: 60000, density: 90, cost: 9.0, carbon: 0.6, group: "Fungus", formable: true, note: "Mushroom roots grown in a mould: a literally grown material." },
+    mineral_wool: { name: "Stone wool", sigma: 15000, density: 50, cost: 2.5, carbon: 1.3, group: "Mineral & synthetic", formable: false, note: "Melted rock fibres. Does not burn; must be fully covered." },
+    melamine_foam: { name: "Melamine foam", sigma: 10000, density: 9, cost: 15.0, carbon: 4.0, group: "Mineral & synthetic", formable: true, note: "Feather-light foam, cuts into any shape. Fossil-based." },
+  };
+  const RIGIDS = {
+    rigid_pet: { name: "Rigid recycled PET", density: 900, cost: 6.0, carbon: 1.8, note: "Same plastic as PET felt: recycles together." },
+    birch_plywood: { name: "Birch plywood", density: 680, cost: 3.5, carbon: 0.7, note: "Strong, easy to CNC-cut." },
+    solid_cardboard: { name: "Solid recycled cardboard", density: 700, cost: 1.5, carbon: 0.9, note: "Cheap and light, fine for short exhibitions." },
+    pla_print: { name: "3D-printed PLA", density: 1240, cost: 25.0, carbon: 3.0, note: "Plant-starch plastic, any shape; slow to print." },
+    fired_clay: { name: "Fired clay", density: 1900, cost: 4.0, carbon: 0.4, note: "Like the sound pots built into ancient theatres and medieval churches." },
+  };
+  const FELT_KEYS = Object.keys(FELTS);
+  const RIGID_KEYS = Object.keys(RIGIDS);
+
+  // ------------------------------------------------------------ targets ---
+  const TARGETS = {
+    voices: { 125: 0.02, 250: 0.10, 500: 0.20, 1000: 0.28, 2000: 0.25, 4000: 0.15 },
+    crowd: { 125: 0.15, 250: 0.25, 500: 0.25, 1000: 0.20, 2000: 0.10, 4000: 0.05 },
+    exhibition: { 125: 0.085, 250: 0.175, 500: 0.225, 1000: 0.24, 2000: 0.175, 4000: 0.10 },
+    low_noise: { 125: 0.35, 250: 0.30, 500: 0.20, 1000: 0.10, 2000: 0.05, 4000: 0.0 },
+  };
+
+  function bandWeights(target) {
+    const octaves = Object.keys(TARGETS[target]).map(Number).sort((a, b) => a - b);
+    const nearest = FREQS.map((f) => {
+      let best = octaves[0], d = Infinity;
+      for (const o of octaves) { const x = Math.abs(Math.log2(f / o)); if (x < d) { d = x; best = o; } }
+      return best;
+    });
+    const count = {};
+    nearest.forEach((o) => { count[o] = (count[o] || 0) + 1; });
+    const w = nearest.map((o) => TARGETS[target][o] / count[o]);
+    const s = w.reduce((a, b) => a + b, 0);
+    return w.map((v) => v / s);
+  }
+
+  // ------------------------------------------------------------- media ----
+  function miki(f, sigma) {
+    const x = f / sigma, a = Math.pow(x, -0.632), b = Math.pow(x, -0.618);
+    return { zc: C(Z0 * (1 + 0.070 * a), -Z0 * 0.107 * a), kc: C((2 * Math.PI * f / C0) * (1 + 0.109 * b), -(2 * Math.PI * f / C0) * 0.160 * b) };
+  }
+  function porousMedium(f, sigma, frameDensity) {
+    const w = 2 * Math.PI * f, { zc, kc } = miki(f, sigma);
+    let rho = scale(mul(zc, kc), 1 / w);
+    const k = div(scale(zc, w), kc);
+    if (frameDensity != null) {
+      const rt = frameDensity + RHO0;
+      rho = div(sub(scale(rho, rt), C(RHO0 * RHO0)), add(rho, C(rt - 2 * RHO0)));
+    }
+    return { rho, k };
+  }
+  function mixedMedium(f, sigma, s, frameDensity) {
+    s = Math.min(1, Math.max(0, s));
+    const p = porousMedium(f, sigma, frameDensity);
+    const rho = inv(add(scale(inv(p.rho), s), C((1 - s) / RHO0)));
+    const k = inv(add(scale(inv(p.k), s), C((1 - s) / K0)));
+    return { rho, k };
+  }
+  const AIR = { rho: C(RHO0), k: C(K0) };
+  function slitMedium(f, width) {
+    const w = 2 * Math.PI * f, h = width / 2, rot = C(Math.SQRT1_2, Math.SQRT1_2); // sqrt(j)
+    const a = scale(rot, h * Math.sqrt(w * RHO0 / ETA));
+    const b = scale(rot, h * Math.sqrt(w * RHO0 * PRANDTL / ETA));
+    const rho = div(C(RHO0), sub(C(1), div(ctanh(a), a)));
+    const k = div(C(GAMMA * 101325), add(C(1), scale(div(ctanh(b), b), GAMMA - 1)));
+    return { rho, k };
+  }
+  function perforatedPlate(f, d, t, eps) {
+    const w = 2 * Math.PI * f, kp = d / 2 * Math.sqrt(w * RHO0 / ETA);
+    const r = 32 * ETA * t / (eps * RHO0 * C0 * d * d) * (Math.sqrt(1 + kp * kp / 32) + Math.SQRT2 / 32 * kp * d / t);
+    const x = w * t / (eps * C0) * (1 + 1 / Math.sqrt(9 + kp * kp / 2) + 0.85 * d / t);
+    return C(Z0 * r, Z0 * x);
+  }
+
+  // ----------------------------------------------------- transfer matrices
+  function layer(f, theta, m, d) {
+    const w = 2 * Math.PI * f, kx = w / C0 * Math.sin(theta);
+    let kz = csqrt(sub(scale(div(m.rho, m.k), w * w), C(kx * kx)));
+    if (kz.im > 0) kz = C(-kz.re, -kz.im);
+    const zz = div(scale(m.rho, w), kz);
+    const arg = scale(kz, d), c = ccos(arg), s = csin(arg);
+    return [c, mul(J, mul(zz, s)), mul(J, div(s, zz)), c];
+  }
+  const mmul = (a, b) => [add(mul(a[0], b[0]), mul(a[1], b[2])), add(mul(a[0], b[1]), mul(a[1], b[3])),
+    add(mul(a[2], b[0]), mul(a[3], b[2])), add(mul(a[2], b[1]), mul(a[3], b[3]))];
+  const stack = (ms) => ms.reduce((acc, m) => (acc ? mmul(acc, m) : m), null);
+  const admittanceOn = (m, yb) => div(add(m[2], mul(m[3], yb)), add(m[0], mul(m[1], yb)));
+  function alphaFromY(y, theta) {
+    const c = Math.cos(theta), zy = scale(y, Z0);
+    return Math.min(1, Math.max(0, 1 - abs2(div(sub(C(c), zy), add(C(c), zy)))));
+  }
+  function alphaFree(m, theta) {
+    const z = Z0 / Math.cos(theta);
+    const a = add(m[0], scale(m[1], 1 / z)), b = add(scale(m[2], z), m[3]);
+    const den = add(a, b);
+    const r = div(sub(a, b), den), t = div(C(2), den);
+    return Math.min(1, Math.max(0, 1 - abs2(r) - abs2(t)));
+  }
+
+  // Random-incidence absorption: perFreq(f) prepares what does not depend on angle
+  // and returns the absorption as a function of angle.
+  function randomIncidence(perFreq) {
+    return FREQS.map((f) => {
+      const atAngle = perFreq(f);
+      return THETA.reduce((acc, t, i) => acc + PARIS[i] * atAngle(t), 0);
+    });
+  }
+
+  const mid = () => Array.from({ length: N_SUB }, (_, i) => (i + 0.5) / N_SUB);
+  const gradedMedia = (f, sigma, fr, fd) => fr.map((s) => mixedMedium(f, sigma, s, fd));
+  const graded = (f, t, media, depth) => stack(media.map((m) => layer(f, t, m, depth / media.length)));
+
+  // --------------------------------------------------------------- models -
+  function spikes(p) {
+    const felt = FELTS[p.porous], d = p.depth / 1000, taper = 1 - p.base;
+    const s = mid().map((z) => (taper > 0 ? (z >= taper ? 1 : Math.pow(z / taper, p.taper)) : 1));
+    const alpha = randomIncidence((f) => {
+      const media = gradedMedia(f, felt.sigma, s);
+      return (t) => alphaFromY(admittanceOn(graded(f, t, media, d), C(0)), t);
+    });
+    return { alpha, mass: mean(s) * d * felt.density, fractions: s };
+  }
+  function sponge(p) {
+    const felt = FELTS[p.porous], d = p.depth / 1000, ds = d * (1 - p.gap);
+    const s = mid().map((z) => p.outer + (p.inner - p.outer) * z);
+    const alpha = randomIncidence((f) => {
+      const media = gradedMedia(f, felt.sigma, s);
+      return (t) => {
+        let m = graded(f, t, media, ds);
+        if (p.gap > 0) m = mmul(m, layer(f, t, AIR, d * p.gap));
+        return alphaFromY(admittanceOn(m, C(0)), t);
+      };
+    });
+    return { alpha, mass: mean(s) * ds * felt.density, fractions: s };
+  }
+  function cloud(p) {
+    const felt = FELTS[p.porous], d = p.depth / 1000;
+    const half = mid().map((z) => p.outer + (p.inner - p.outer) * z);
+    const s = half.concat(half.slice().reverse());
+    const alpha = randomIncidence((f) => {
+      const media = gradedMedia(f, felt.sigma, s, felt.density);
+      return (t) => 2 * alphaFree(graded(f, t, media, d), t);
+    });
+    return { alpha, mass: mean(s) * d * felt.density, fractions: s };
+  }
+  function resonatorZ(f, p, depth, fill, sigma) {
+    const plate = perforatedPlate(f, p.hole / 1000, p.plate / 1000, p.porosity);
+    const m = mmul(layer(f, 0, porousMedium(f, sigma), depth * fill), layer(f, 0, AIR, depth * (1 - fill)));
+    return add(plate, inv(admittanceOn(m, C(0))));
+  }
+  function bottles(p) {
+    const felt = FELTS[p.porous], rigid = RIGIDS[p.rigid], d = p.depth / 1000, depths = [d, d * p.ratio];
+    const yf = FREQS.map((f) => depths.reduce((acc, x) => add(acc, scale(inv(resonatorZ(f, p, x, p.fill, felt.sigma)), 0.5)), C(0)));
+    const alpha = FREQS.map((f, i) => THETA.reduce((acc, t, j) => acc + PARIS[j] * alphaFromY(yf[i], t), 0));
+    const md = mean(depths);
+    const mass = p.plate / 1000 * (1 - p.porosity) * rigid.density + p.fill * md * felt.density + 2 / PARTITION_SPACING * md * WALL * rigid.density;
+    return { alpha, mass, depths };
+  }
+  function coil(p) {
+    const rigid = RIGIDS[p.rigid], d = p.depth / 1000, w = p.width / 1000, a = p.cell / 1000;
+    const lMax = p.coil * a * d / (w + WALL);
+    const lengths = [0, 1, 2, 3].map((i) => lMax * (1 - p.grading * i / 3));
+    const eps = w / a;
+    const yf = FREQS.map((f) => {
+      const m = slitMedium(f, w), zt = csqrt(mul(m.rho, m.k)), kt = scale(csqrt(div(m.rho, m.k)), 2 * Math.PI * f);
+      const end = C(0, 2 * Math.PI * f * RHO0 * 0.6 * w);
+      return lengths.reduce((acc, l) => add(acc, scale(inv(add(scale(div(mul(J, zt), ctan(scale(kt, l))), -1), end)), 0.25 * eps)), C(0));
+    });
+    const alpha = FREQS.map((f, i) => THETA.reduce((acc, t, j) => acc + PARIS[j] * alphaFromY(yf[i], t), 0));
+    const mass = (WALL / (w + WALL) * d * p.coil + 0.002 * (1 - eps)) * rigid.density;
+    return { alpha, mass, lengths };
+  }
+  function hybrid(p) {
+    const felt = FELTS[p.porous], rigid = RIGIDS[p.rigid], d = p.depth / 1000, front = d * p.front;
+    const s = mid().map((z) => p.outer + (p.inner - p.outer) * z);
+    const cavity = Math.max(d - front - p.plate / 1000, 0.001);
+    const alpha = randomIncidence((f) => {
+      const media = gradedMedia(f, felt.sigma, s), y = inv(resonatorZ(f, p, cavity, 0, felt.sigma));
+      return (t) => alphaFromY(admittanceOn(graded(f, t, media, front), y), t);
+    });
+    const mass = mean(s) * front * felt.density + p.plate / 1000 * (1 - p.porosity) * rigid.density + 2 / PARTITION_SPACING * cavity * WALL * rigid.density;
+    return { alpha, mass, fractions: s, cavity };
+  }
+  const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+
+  const DEPTH = ["depth", "depth", [0.15, 1.0]];
+  const FAMILIES = [
+    { key: "spikes", name: "Spikes and wedges", imitates: "grass, fur, owl-feather velvet", mounting: "wall",
+      idea: "Sound slides in between the points and never meets a hard surface to bounce off.",
+      genes: [DEPTH, ["base", "float", [0, 0.7]], ["taper", "float", [0.4, 3]], ["porous", "porous"]], model: spikes },
+    { key: "sponge", name: "Gradient sponge", imitates: "sea sponge, moss, bone", mounting: "wall",
+      idea: "Open and airy at the surface so sound gets in, denser inside so it gets trapped.",
+      genes: [DEPTH, ["outer", "float", [0.05, 1]], ["inner", "float", [0.05, 1]], ["gap", "float", [0, 0.6]], ["porous", "porous"]], model: sponge },
+    { key: "cloud", name: "Hanging cloud", imitates: "hanging moss, a forest canopy", mounting: "hanging",
+      idea: "Hangs free in the air, so it catches sound from both sides.",
+      genes: [DEPTH, ["outer", "float", [0.05, 1]], ["inner", "float", [0.05, 1]], ["porous", "porous"]], model: cloud },
+    { key: "bottles", name: "Bottle resonators", imitates: "seashells, gourds, hollow stems", mounting: "wall",
+      idea: "Air in a small neck bounces on the air in the cavity behind it and swallows a low pitch.",
+      genes: [DEPTH, ["hole", "float", [2, 20]], ["plate", "float", [2, 15]], ["porosity", "float", [0.005, 0.2]], ["fill", "float", [0, 1]],
+        ["ratio", "float", [0.2, 1]], ["porous", "porous"], ["rigid", "rigid"]], model: bottles },
+    { key: "coil", name: "Coiled channels", imitates: "snail shell, the cochlea in your ear", mounting: "wall",
+      idea: "A very long, narrow tube folded into a thin object catches low pitches without needing depth.",
+      genes: [DEPTH, ["width", "float", [2, 15]], ["cell", "float", [20, 80]], ["grading", "float", [0, 0.9]], ["coil", "float", [0.3, 1]], ["rigid", "rigid"]], model: coil },
+    { key: "hybrid", name: "Moss on a shell", imitates: "moss growing on a shell or bark", mounting: "wall",
+      idea: "A soft sponge catches the middle and high pitches; bottle cavities behind it catch the low ones.",
+      genes: [DEPTH, ["front", "float", [0.2, 0.8]], ["outer", "float", [0.05, 1]], ["inner", "float", [0.05, 1]], ["hole", "float", [2, 20]],
+        ["plate", "float", [2, 10]], ["porosity", "float", [0.005, 0.2]], ["porous", "porous"], ["rigid", "rigid"]], model: hybrid },
+  ];
+  const FAMILY = Object.fromEntries(FAMILIES.map((f) => [f.key, f]));
+
+  // ---------------------------------------------------------- evolution --
+  const round = (x, n) => Math.round(x * 10 ** n) / 10 ** n;
+  function decode(fam, v, brief) {
+    const porous = brief.porous && brief.porous.length ? brief.porous : FELT_KEYS;
+    const rigid = brief.rigid && brief.rigid.length ? brief.rigid : RIGID_KEYS;
+    const p = {};
+    fam.genes.forEach(([name, kind, spec], i) => {
+      const u = Math.min(1, Math.max(0, v[i]));
+      if (kind === "porous") p[name] = porous[Math.min(Math.floor(u * porous.length), porous.length - 1)];
+      else if (kind === "rigid") p[name] = rigid[Math.min(Math.floor(u * rigid.length), rigid.length - 1)];
+      else if (kind === "depth") p[name] = round((spec[0] + u * (spec[1] - spec[0])) * brief.maxDepth, 1);
+      else p[name] = round(spec[0] + u * (spec[1] - spec[0]), 4);
+    });
+    return p;
+  }
+  function assess(fam, params, brief, weights) {
+    weights = weights || bandWeights(brief.target);
+    const r = fam.model(params);
+    const score = r.alpha.reduce((acc, a, i) => acc + a * weights[i], 0);
+    const over = r.mass > brief.massBudget;
+    const fitness = score - (Math.max(0, r.mass / brief.massBudget - 1) + (over ? 0.1 : 0));
+    return { family: fam.key, params, alpha: r.alpha, mass: r.mass, score, fitness, extra: r };
+  }
+
+  function rng(seed) { // mulberry32
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  // A breeder advances one generation per step() call so a page can animate it.
+  function breeder(fam, brief, { population = 24, generations = 16, seed = 1, mutation = 0.15, elite = 2 } = {}) {
+    const rand = rng(seed + fam.key.length * 101);
+    const normal = () => Math.sqrt(-2 * Math.log(1 - rand())) * Math.cos(2 * Math.PI * rand());
+    const n = fam.genes.length, weights = bandWeights(brief.target), archive = new Map();
+    let pop = Array.from({ length: population }, () => Array.from({ length: n }, rand));
+    let gen = 0, best = null;
+    const evaluate = (v) => {
+      const p = decode(fam, v, brief), key = JSON.stringify(p);
+      if (!archive.has(key)) {
+        const r = assess(fam, p, brief, weights);
+        archive.set(key, r);
+        if (!best || r.fitness > best.fitness) best = r;
+      }
+      return archive.get(key).fitness;
+    };
+    const tournament = (fit) => {
+      let bi = Math.floor(rand() * fit.length);
+      for (let k = 1; k < 3; k++) { const i = Math.floor(rand() * fit.length); if (fit[i] > fit[bi]) bi = i; }
+      return bi;
+    };
+    return {
+      get best() { return best; },
+      get generation() { return gen; },
+      get done() { return gen > generations; },
+      generations,
+      step() {
+        const fit = pop.map(evaluate);
+        gen += 1;
+        if (gen > generations) return best;
+        const order = fit.map((f, i) => i).sort((a, b) => fit[b] - fit[a]);
+        const next = order.slice(0, elite).map((i) => pop[i].slice());
+        while (next.length < population) {
+          const a = pop[tournament(fit)], b = pop[tournament(fit)];
+          next.push(a.map((x, i) => {
+            let g = rand() < 0.5 ? x : b[i];
+            if (rand() < mutation) g = Math.min(1, Math.max(0, g + 0.15 * normal()));
+            if (rand() < mutation / 5) g = rand();
+            return g;
+          }));
+        }
+        pop = next;
+        return best;
+      },
+    };
+  }
+
+  // Plain flat layer on a wall: the fair way to compare materials on their own.
+  function flatLayer(key, thicknessMm) {
+    const felt = FELTS[key], d = thicknessMm / 1000;
+    const alpha = randomIncidence((f) => {
+      const m = porousMedium(f, felt.sigma);
+      return (t) => alphaFromY(admittanceOn(layer(f, t, m, d), C(0)), t);
+    });
+    return { alpha, mass: d * felt.density };
+  }
+
+  const quarterWave = (depthMm) => C0 / (4 * depthMm / 1000);
+
+  const Engine = { FREQS, TARGETS, FELTS, RIGIDS, FAMILIES, FAMILY, N_SUB, bandWeights, decode, assess, breeder, flatLayer, quarterWave };
+  if (typeof module !== "undefined" && module.exports) module.exports = Engine;
+  else root.Engine = Engine;
+})(this);
+</script>
+<script>/* Biothing Sound Lab rooms: exhibition spaces as 3D meshes, and their reverberation.
+ * Statistical room acoustics (Sabine): good for comparing options in a space,
+ * not a substitute for a ray-tracing study of a specific hall. */
+(function (root) {
+  "use strict";
+
+  const OCTAVES = [125, 250, 500, 1000, 2000, 4000];
+  // Air absorption 4m (1/m) at 20 C, 50 % RH (from ISO 9613-1 attenuation).
+  const AIR_4M = [0.0004, 0.0012, 0.0026, 0.0045, 0.009, 0.027];
+  // Equivalent absorption area per standing visitor, m2 (typical values).
+  const PERSON = [0.15, 0.3, 0.5, 0.7, 0.8, 0.8];
+
+  // Typical absorption coefficients per octave 125-4000 Hz (indicative textbook values).
+  const SURFACES = {
+    concrete: { name: "Concrete or screed", use: "floor", alpha: [0.01, 0.01, 0.02, 0.02, 0.02, 0.03] },
+    stone: { name: "Stone or tiles", use: "floor", alpha: [0.01, 0.01, 0.01, 0.02, 0.02, 0.02] },
+    wood_floor: { name: "Wooden floor", use: "floor", alpha: [0.15, 0.11, 0.1, 0.07, 0.06, 0.07] },
+    carpet: { name: "Carpet", use: "floor", alpha: [0.02, 0.06, 0.14, 0.37, 0.6, 0.65] },
+    masonry: { name: "Painted concrete or brick", use: "wall", alpha: [0.01, 0.01, 0.02, 0.02, 0.02, 0.03] },
+    plasterboard: { name: "Plasterboard on studs", use: "wall", alpha: [0.29, 0.1, 0.05, 0.04, 0.07, 0.09] },
+    glass: { name: "Large glass panes", use: "wall", alpha: [0.18, 0.06, 0.04, 0.03, 0.02, 0.02] },
+    wood_panel: { name: "Wood panelling", use: "wall", alpha: [0.42, 0.21, 0.1, 0.08, 0.06, 0.06] },
+    curtain: { name: "Heavy curtains", use: "wall", alpha: [0.07, 0.31, 0.49, 0.75, 0.7, 0.6] },
+    plaster: { name: "Plaster ceiling", use: "ceiling", alpha: [0.01, 0.01, 0.02, 0.03, 0.04, 0.05] },
+    metal_deck: { name: "Metal roof deck", use: "ceiling", alpha: [0.25, 0.15, 0.1, 0.08, 0.07, 0.07] },
+    acoustic_tiles: { name: "Acoustic ceiling tiles", use: "ceiling", alpha: [0.5, 0.7, 0.6, 0.7, 0.7, 0.5] },
+  };
+
+  const PRESETS = [
+    { key: "gallery", name: "Gallery room", size: [12, 8, 4.5], floor: "wood_floor", wall: "plasterboard", ceiling: "plaster", people: 30,
+      note: "A classic white gallery with hard walls." },
+    { key: "white_cube", name: "White cube", size: [20, 12, 5], floor: "concrete", wall: "masonry", ceiling: "plaster", people: 60,
+      note: "Concrete floor, painted masonry: very echoey." },
+    { key: "foyer", name: "Glass foyer", size: [30, 6, 4], floor: "stone", wall: "glass", ceiling: "plaster", people: 80,
+      note: "A long entrance hall with a glass facade." },
+    { key: "hall", name: "Exhibition hall", size: [40, 30, 10], floor: "concrete", wall: "plasterboard", ceiling: "metal_deck", people: 300,
+      note: "A big fair hall under a metal roof." },
+  ];
+
+  // ---------------------------------------------------------------- meshes --
+  // A mesh is {tris: [[x,y,z]x3, ...], tags: ["floor"|"wall"|"ceiling", ...]}, metres, z up.
+  function boxMesh(w, d, h) {
+    const p = (x, y, z) => [x, y, z];
+    const quads = [
+      ["floor", [p(0, 0, 0), p(0, d, 0), p(w, d, 0), p(w, 0, 0)]],
+      ["ceiling", [p(0, 0, h), p(w, 0, h), p(w, d, h), p(0, d, h)]],
+      ["wall", [p(0, 0, 0), p(w, 0, 0), p(w, 0, h), p(0, 0, h)]],
+      ["wall", [p(w, 0, 0), p(w, d, 0), p(w, d, h), p(w, 0, h)]],
+      ["wall", [p(w, d, 0), p(0, d, 0), p(0, d, h), p(w, d, h)]],
+      ["wall", [p(0, d, 0), p(0, 0, 0), p(0, 0, h), p(0, d, h)]],
+    ];
+    const tris = [], tags = [];
+    for (const [tag, q] of quads) {
+      tris.push([q[0], q[1], q[2]], [q[0], q[2], q[3]]);
+      tags.push(tag, tag);
+    }
+    return { tris, tags };
+  }
+
+  const subv = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const len = (a) => Math.hypot(a[0], a[1], a[2]);
+
+  // Parse an OBJ file (vertices and faces only). Faces are fan-triangulated.
+  // Units: if the model is larger than 500 units it is assumed to be in millimetres,
+  // larger than 60 units in centimetres. `yUp` converts Y-up exports to z-up.
+  function parseOBJ(text, { yUp = false } = {}) {
+    const v = [], tris = [];
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      if (line.startsWith("v ")) {
+        const [x, y, z] = line.slice(2).trim().split(/\s+/).map(Number);
+        v.push(yUp ? [x, -z, y] : [x, y, z]);
+      } else if (line.startsWith("f ")) {
+        const idx = line.slice(2).trim().split(/\s+/).map((t) => {
+          const i = parseInt(t.split("/")[0], 10);
+          return i < 0 ? v.length + i : i - 1;
+        });
+        for (let k = 1; k + 1 < idx.length; k++) tris.push([v[idx[0]], v[idx[k]], v[idx[k + 1]]]);
+      }
+    }
+    if (!tris.length || tris.some((t) => t.some((p) => !p))) throw new Error("No valid faces found in this OBJ file.");
+    let min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (const t of tris) for (const p of t) for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], p[i]); max[i] = Math.max(max[i], p[i]); }
+    const span = Math.max(...max.map((m, i) => m - min[i]));
+    const unit = span > 500 ? 0.001 : span > 60 ? 0.01 : 1;
+    const moved = tris.map((t) => t.map((p) => [(p[0] - min[0]) * unit, (p[1] - min[1]) * unit, (p[2] - min[2]) * unit]));
+    const h = (max[2] - min[2]) * unit;
+    const tags = moved.map((t) => {
+      const n = cross(subv(t[1], t[0]), subv(t[2], t[0])), l = len(n) || 1, nz = n[2] / l;
+      const cz = (t[0][2] + t[1][2] + t[2][2]) / 3;
+      if (Math.abs(nz) < 0.7) return "wall";
+      return cz < h / 2 ? "floor" : "ceiling";
+    });
+    return { tris: moved, tags, unit };
+  }
+
+  function analyze(mesh) {
+    let vol = 0;
+    const areas = { floor: 0, wall: 0, ceiling: 0 };
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    mesh.tris.forEach((t, i) => {
+      const [a, b, c] = t;
+      vol += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6;
+      areas[mesh.tags[i]] += len(cross(subv(b, a), subv(c, a))) / 2;
+      for (const p of t) for (let k = 0; k < 3; k++) { min[k] = Math.min(min[k], p[k]); max[k] = Math.max(max[k], p[k]); }
+    });
+    return { volume: Math.abs(vol), areas, total: areas.floor + areas.wall + areas.ceiling, min, max };
+  }
+
+  // ------------------------------------------------------------- acoustics --
+  // One-third-octave absorption (100-5000 Hz, 18 bands) to octaves 125-4000.
+  function thirdToOctave(alpha18) {
+    return OCTAVES.map((_, i) => (alpha18[3 * i] + alpha18[3 * i + 1] + alpha18[3 * i + 2]) / 3);
+  }
+
+  // Recommended reverberation for rooms where people talk (after DIN 18041, group A3).
+  const targetRT = (volume) => Math.max(0.3, 0.32 * Math.log10(volume) - 0.17);
+
+  // space: {volume, areas, finishes: {floor, wall, ceiling}, people}
+  // absorbers: [{area, alpha: [6]}] where area * alpha is the added absorption per octave.
+  function reverb(space, absorbers = []) {
+    const base = OCTAVES.map((_, i) =>
+      space.areas.floor * SURFACES[space.finishes.floor].alpha[i]
+      + space.areas.wall * SURFACES[space.finishes.wall].alpha[i]
+      + space.areas.ceiling * SURFACES[space.finishes.ceiling].alpha[i]
+      + space.people * PERSON[i]
+      + AIR_4M[i] * space.volume);
+    const added = OCTAVES.map((_, i) => absorbers.reduce((acc, a) => acc + a.area * a.alpha[i], 0));
+    const rt = (A) => A.map((a) => 0.161 * space.volume / a);
+    const after = base.map((a, i) => a + added[i]);
+    const speech = (A) => (A[2] + A[3]) / 2; // 500-1000 Hz, where voices carry
+    return {
+      absorptionBefore: base, absorptionAfter: after,
+      rtBefore: rt(base), rtAfter: rt(after),
+      target: targetRT(space.volume),
+      speechRtBefore: 0.161 * space.volume / speech(base), speechRtAfter: 0.161 * space.volume / speech(after),
+      noiseDrop: 10 * Math.log10(speech(after) / speech(base)), // drop of the reverberant (crowd) level, dB
+    };
+  }
+
+  // m2 of an absorber with octave absorption `alpha` needed to reach the target at 500-1000 Hz.
+  function areaNeeded(space, alpha, existing = []) {
+    const r = reverb(space, existing);
+    const need = 0.161 * space.volume / r.target - (r.absorptionAfter[2] + r.absorptionAfter[3]) / 2;
+    const per = (alpha[2] + alpha[3]) / 2;
+    return need <= 0 ? 0 : need / per;
+  }
+
+  const Rooms = { OCTAVES, SURFACES, PRESETS, PERSON, boxMesh, parseOBJ, analyze, thirdToOctave, targetRT, reverb, areaNeeded };
+  if (typeof module !== "undefined" && module.exports) module.exports = Rooms;
+  else root.Rooms = Rooms;
+})(this);
+</script>
+<script>
+"use strict";
+const E = window.Engine, R = window.Rooms;
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const pct = (x) => Math.round(x * 100) + "%";
+const mm = (x) => Math.round(x) + " mm";
+const hz = (f) => (f >= 1000 ? (f / 1000).toFixed(1).replace(/\.0$/, "") + " kHz" : Math.round(f / 10) * 10 + " Hz");
+const fix = (x, n = 1) => Number(x).toFixed(n);
+
+// ------------------------------------------------------------------ state --
+const TARGET_INFO = {
+  exhibition: { label: "Exhibition mix", example: "voices plus crowd" },
+  voices: { label: "Voices", example: "talking, meetings, calls" },
+  crowd: { label: "Crowd buzz", example: "many people in a big hall" },
+  low_noise: { label: "Low noise", example: "music, machines, footsteps" },
+};
+const GROUP_ORDER = ["Plant", "Animal", "Fungus", "Recycled", "Mineral & synthetic"];
+const FAMILY_COLORS = { spikes: "#4a90e2", sponge: "#5bb67c", cloud: "#e6a23c", bottles: "#b07ce0", coil: "#e46b5f", hybrid: "#3fb8b0" };
+const state = {
+  ws: "shapes", tool: "all", target: "exhibition", depth: 100, mass: 3, hang: true,
+  porous: new Set(Object.keys(E.FELTS)), rigid: new Set(Object.keys(E.RIGIDS)),
+  results: null, preview: {}, seed: 1, growing: false, progress: 0, ranking: null,
+  flatThick: 50, matView: "chart",
+  spaces: [], spaceId: null, yUp: false, showAbs: true, nextId: 1,
+};
+const brief = () => ({ target: state.target, maxDepth: state.depth, massBudget: state.mass, porous: [...state.porous], rigid: [...state.rigid] });
+const families = () => E.FAMILIES.filter((f) => state.hang || f.mounting !== "hanging");
+const current = (key) => (state.results && state.results.find((r) => r.family === key)) || state.preview[key];
+const grown = (key) => !!(state.results && state.results.find((r) => r.family === key));
+
+function refreshPreview() {
+  const b = brief();
+  if (!b.porous.length) return;
+  for (const f of E.FAMILIES) state.preview[f.key] = E.assess(f, E.decode(f, f.genes.map(() => 0.5), b), b);
+}
+function briefChanged() { state.results = null; state.ranking = null; refreshPreview(); }
+
+// ------------------------------------------------------------------ icons --
+const ICONS = {
+  all: '<rect x="3" y="3" width="6" height="6" rx="1"/><rect x="11" y="3" width="6" height="6" rx="1"/><rect x="3" y="11" width="6" height="6" rx="1"/><rect x="11" y="11" width="6" height="6" rx="1"/>',
+  spikes: '<path d="M3 4 L17 6 L3 8 M3 9 L17 11 L3 13 M3 14 L17 16 L3 18"/>',
+  sponge: '<circle cx="6" cy="6" r="1.4"/><circle cx="12" cy="5" r="1.1"/><circle cx="15" cy="10" r="1.6"/><circle cx="8" cy="11" r="1.2"/><circle cx="5" cy="15" r="1.5"/><circle cx="12" cy="15" r="1.1"/>',
+  cloud: '<path d="M10 1 V5"/><rect x="4" y="5" width="12" height="10" rx="2"/>',
+  bottles: '<path d="M8 2 h4 v4 l3 3 v9 h-10 v-9 l3 -3 z"/>',
+  coil: '<path d="M10 10 m-1 0 a1 1 0 1 1 2 0 a3 3 0 1 1 -5 -1 a5 5 0 1 1 9 3 a7 7 0 1 1 -12 -5"/>',
+  hybrid: '<circle cx="5" cy="5" r="1.2"/><circle cx="10" cy="4" r="1.2"/><circle cx="15" cy="5" r="1.2"/><path d="M3 9 H17 M3 9 V17 H17 V9 M8 9 V12 M12 9 V12"/>',
+  chart: '<path d="M3 17 V3 M3 17 H17 M5 13 L9 8 L12 11 L17 4"/>',
+  table: '<rect x="3" y="4" width="14" height="12" rx="1"/><path d="M3 8 H17 M3 12 H17 M8 4 V16"/>',
+  orbit: '<ellipse cx="10" cy="10" rx="7" ry="3"/><path d="M14 5 l3 2 l-3 2"/><circle cx="10" cy="10" r="1.5"/>',
+  top: '<rect x="3" y="3" width="14" height="14" rx="1"/><path d="M3 10 H17 M10 3 V17"/>',
+  home: '<path d="M3 10 L10 3 L17 10 M5 8 V17 H15 V8"/>',
+  eye: '<path d="M2 10 C5 4 15 4 18 10 C15 16 5 16 2 10 Z"/><circle cx="10" cy="10" r="2.5"/>',
+};
+const icon = (k) => `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[k]}</svg>`;
+
+// ------------------------------------------------------------- rendering --
+function renderAll() { renderTabs(); renderOptbar(); renderTools(); renderCanvas(); renderDock(); renderStatus(); renderGuideTip(); }
+function renderTabs() { $$("#ws-tabs [data-ws]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.ws === state.ws))); }
+$("#ws-tabs").addEventListener("click", (e) => { const b = e.target.closest("[data-ws]"); if (b) setWorkspace(b.dataset.ws); });
+function setWorkspace(ws) { state.ws = ws; renderAll(); }
+
+function renderOptbar() {
+  const ob = $("#optbar");
+  if (state.ws === "spaces") {
+    ob.innerHTML = `<div class="opt" id="opt-add"><label for="add-preset">Add a space</label>
+        <select id="add-preset">${R.PRESETS.map((p) => `<option value="${p.key}">${p.name} (${p.size.join(" × ")} m)</option>`).join("")}</select>
+        <button class="btn small" id="add-space">Add</button></div>
+      <span class="divider"></span>
+      <div class="opt" id="opt-import"><button class="btn small" id="import-btn">Import 3D model (.obj)</button>
+        <input type="file" id="import-file" accept=".obj" hidden>
+        <label class="opt"><input type="checkbox" id="y-up" ${state.yUp ? "checked" : ""}> Model is Y-up</label></div>
+      <span class="spacer"></span>
+      <span class="hint">Tip: export one OBJ per exhibition area from Rhino, SketchUp or Blender.</span>`;
+    $("#add-space").onclick = () => { addPreset($("#add-preset").value); };
+    $("#import-btn").onclick = () => $("#import-file").click();
+    $("#import-file").onchange = (e) => importOBJ(e.target.files[0]);
+    $("#y-up").onchange = (e) => { state.yUp = e.target.checked; };
+    return;
+  }
+  ob.innerHTML = `<div class="opt" id="opt-target"><label for="target">Quiet</label>
+      <select id="target">${Object.entries(TARGET_INFO).map(([k, t]) => `<option value="${k}" ${k === state.target ? "selected" : ""}>${t.label} (${t.example})</option>`).join("")}</select></div>
+    <span class="divider"></span>
+    <div class="opt" id="opt-space"><label for="depth">Depth</label><input type="range" id="depth" min="20" max="300" step="5" value="${state.depth}"><output id="depth-out"></output>
+      <label for="mass">Material</label><input type="range" id="mass" min="0.5" max="10" step="0.5" value="${state.mass}"><output id="mass-out"></output></div>
+    <span class="divider"></span>
+    <label class="opt"><input type="checkbox" id="hang" ${state.hang ? "checked" : ""}> May hang from ceiling</label>
+    <span class="spacer"></span>
+    <button class="btn primary" id="btn-grow">${state.results ? "Grow again" : "Grow shapes"}</button>`;
+  updateOutputs();
+  $("#target").onchange = (e) => { state.target = e.target.value; briefChanged(); renderCanvas(); renderDock(); renderStatus(); };
+  for (const id of ["depth", "mass"]) {
+    $("#" + id).oninput = (e) => { state[id] = Number(e.target.value); updateOutputs(); briefChanged(); renderCanvas(); renderDock(); renderStatus(); };
+  }
+  $("#hang").onchange = (e) => { state.hang = e.target.checked; if (state.tool === "cloud" && !state.hang) state.tool = "all"; briefChanged(); renderTools(); renderCanvas(); renderDock(); };
+  $("#btn-grow").onclick = grow;
+}
+function updateOutputs() {
+  if ($("#depth-out")) $("#depth-out").textContent = mm(state.depth);
+  if ($("#mass-out")) $("#mass-out").textContent = state.mass + " kg/m²";
+  if ($("#btn-grow")) { $("#btn-grow").textContent = state.growing ? "Growing…" : state.results ? "Grow again" : "Grow shapes"; $("#btn-grow").disabled = state.growing; }
+}
+
+function renderTools() {
+  let items;
+  if (state.ws === "shapes") items = [["all", "All shapes side by side"], "sep", ...families().map((f) => [f.key, `${f.name}: imitates ${f.imitates}`])];
+  else if (state.ws === "materials") items = [["chart", "Compare chart"], ["table", "Material table"]];
+  else items = [["orbit", "Orbit view (drag in the viewport)"], ["top", "Top view"], ["home", "Reset view"], "sep", ["eye", "Show or hide absorbers"]];
+  $("#tools").innerHTML = items.map((it) => it === "sep" ? '<span class="tool-sep" aria-hidden="true"></span>' : (() => {
+    const [k, label] = it;
+    const pressed = state.ws === "shapes" ? state.tool === k : state.ws === "materials" ? state.matView === k : k === "eye" ? state.showAbs : false;
+    return `<button class="tool" data-tool="${k}" aria-pressed="${pressed}" aria-label="${esc(label)}" title="${esc(label)}">${icon(k)}</button>`;
+  })()).join("");
+}
+$("#tools").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-tool]");
+  if (!b) return;
+  const k = b.dataset.tool;
+  if (state.ws === "shapes") { state.tool = k; renderTools(); renderCanvas(); renderDock(); renderGuideTip(); }
+  else if (state.ws === "materials") { state.matView = k; renderTools(); renderCanvas(); }
+  else if (k === "eye") { state.showAbs = !state.showAbs; renderTools(); View3D.update(); }
+  else View3D.preset(k);
+});
+
+// ----------------------------------------------------------------- charts --
+function lineChart(series, { yMax = 1, weights = null, w = 680, h = 250 } = {}) {
+  const L = 46, Rr = 12, T = 12, B = 44, fx = (f) => L + (Math.log(f / 100) / Math.log(50)) * (w - L - Rr);
+  const fy = (a) => T + (1 - Math.min(a, yMax) / yMax) * (h - T - B);
+  const bands = [[100, 250, "#22262d", "Low rumble"], [250, 1000, "#1f2a24", "Body of the voice"], [1000, 5000, "#2b2720", "Clarity and consonants"]];
+  let s = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Absorption by pitch">`;
+  for (const [a, b, c, label] of bands) {
+    s += `<rect x="${fx(a)}" y="${T}" width="${fx(b) - fx(a)}" height="${h - T - B}" fill="${c}"/>`;
+    s += `<text x="${(fx(a) + fx(b)) / 2}" y="${h - 6}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--sans)">${label}</text>`;
+  }
+  if (weights) {
+    const max = Math.max(...weights);
+    E.FREQS.forEach((f, i) => { const bh = (weights[i] / max) * 30; s += `<rect x="${fx(f) - 5}" y="${h - B - bh}" width="10" height="${bh}" fill="var(--signal)" opacity="0.35"/>`; });
+  }
+  const step = yMax > 1 ? 0.5 : 0.25;
+  for (let v = 0; v <= yMax + 1e-9; v += step) {
+    s += `<line x1="${L}" x2="${w - Rr}" y1="${fy(v)}" y2="${fy(v)}" stroke="var(--line)"/>`;
+    s += `<text x="${L - 6}" y="${fy(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)" font-family="var(--mono)">${yMax > 1 ? v.toFixed(1) : Math.round(v * 100) + "%"}</text>`;
+  }
+  for (const f of [100, 250, 500, 1000, 2000, 5000]) s += `<text x="${fx(f)}" y="${h - B + 15}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--mono)">${hz(f)}</text>`;
+  for (const sr of series) {
+    const pts = sr.alpha.map((a, i) => `${fx(E.FREQS[i]).toFixed(1)},${fy(a).toFixed(1)}`).join(" ");
+    s += `<polyline points="${pts}" fill="none" stroke="${sr.color}" stroke-width="${sr.bold ? 3 : 1.8}" ${sr.dashed ? 'stroke-dasharray="5 4"' : ""} stroke-linejoin="round"/>`;
+  }
+  return s + "</svg>";
+}
+function rtChart(res, w = 680, h = 240) {
+  const L = 46, Rr = 12, T = 14, B = 34, n = R.OCTAVES.length, gw = (w - L - Rr) / n;
+  const max = Math.max(1, ...res.rtBefore, res.target * 1.3);
+  const y = (v) => T + (1 - v / max) * (h - T - B);
+  let s = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Reverberation time before and after">`;
+  const step = max > 4 ? 1 : 0.5;
+  for (let v = 0; v <= max + 1e-9; v += step) {
+    s += `<line x1="${L}" x2="${w - Rr}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/>`;
+    s += `<text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)" font-family="var(--mono)">${v.toFixed(1)} s</text>`;
+  }
+  R.OCTAVES.forEach((f, i) => {
+    const x = L + gw * i, bw = gw * 0.32;
+    s += `<rect x="${x + gw * 0.16}" y="${y(res.rtBefore[i])}" width="${bw}" height="${h - B - y(res.rtBefore[i])}" fill="#6a6e76"/>`;
+    s += `<rect x="${x + gw * 0.52}" y="${y(res.rtAfter[i])}" width="${bw}" height="${h - B - y(res.rtAfter[i])}" fill="var(--accent)"/>`;
+    s += `<text x="${x + gw / 2}" y="${h - B + 15}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--mono)">${hz(f)}</text>`;
+  });
+  s += `<line x1="${L}" x2="${w - Rr}" y1="${y(res.target)}" y2="${y(res.target)}" stroke="var(--signal)" stroke-width="2" stroke-dasharray="6 4"/>`;
+  s += `<text x="${w - Rr}" y="${y(res.target) - 5}" text-anchor="end" font-size="11" fill="var(--signal)" font-family="var(--sans)">recommended ${res.target.toFixed(2)} s</text>`;
+  return s + "</svg>";
+}
+
+// --------------------------------------------------------------- drawings --
+// Cross-sections on the artboard: wall on the left, room on the right, sound arriving from the right.
+const ART = { muted: "#6b6e75", felt: "#2f7d55", hard: "#7c8088", sound: "#c27d14", bg: "#eeeeec", ink: "#1d1e20" };
+function hash(i, j) { const x = Math.sin(i * 127.1 + j * 311.7) * 43758.5453; return x - Math.floor(x); }
+function texture(x0, x1, y0, y1, density, pal, seed = 0) {
+  let s = "";
+  for (let x = x0 + 1.5; x < x1 - 0.5; x += 4.2) for (let y = y0 + 1.5; y < y1 - 0.5; y += 4.2) {
+    if (hash(Math.round(x * 10) + seed, Math.round(y * 10)) < density) s += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="1.25" fill="${pal.felt}"/>`;
+  }
+  return s;
+}
+function drawForm(key, p, extra, maxDepth, { pal = ART, ruler = false, title = "" } = {}) {
+  const W = 240, H = 150, X0 = 22, SPAN = 180, Y0 = ruler ? 20 : 14, Y1 = 136, sc = SPAN / maxDepth, X = (d) => X0 + d * sc;
+  let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title || key)} cross-section" xmlns="http://www.w3.org/2000/svg">`;
+  s += `<rect x="0" y="0" width="${W}" height="${H}" fill="${pal.bg}"/>`;
+  if (ruler) {
+    const stepMm = maxDepth <= 120 ? 10 : maxDepth <= 250 ? 25 : 50;
+    for (let d = 0; d <= maxDepth + 1e-6; d += stepMm) {
+      const major = Math.round(d / stepMm) % 2 === 0;
+      s += `<line x1="${X(d)}" x2="${X(d)}" y1="0" y2="${major ? 6 : 3.5}" stroke="${pal.muted}" stroke-width="0.6"/>`;
+      if (major) s += `<text x="${X(d) + 1}" y="12" font-size="5.5" fill="${pal.muted}" font-family="monospace">${Math.round(d)}</text>`;
+    }
+  }
+  const wall = () => {
+    let w = `<rect x="6" y="${Y0 - 4}" width="${X0 - 6}" height="${Y1 - Y0 + 8}" fill="${pal.hard}" opacity="0.3"/>`;
+    for (let y = Y0; y < Y1; y += 7) w += `<line x1="6" y1="${y + 7}" x2="${X0}" y2="${y}" stroke="${pal.hard}" stroke-width="0.8"/>`;
+    return w;
+  };
+  const arrow = (x, dir = -1) => `<path d="M${x} 78 h${dir * 14} m${-dir * 5} -5 l${dir * 5} 5 l${-dir * 5} 5" fill="none" stroke="${pal.sound}" stroke-width="2" stroke-linecap="round"/>`;
+  const plate = (xa, thick, holeMm, cells) => {
+    const t = Math.max(2, thick * sc), hh = Math.max(1.6, holeMm * sc);
+    let r = `<rect x="${xa}" y="${Y0}" width="${t}" height="${Y1 - Y0}" fill="${pal.hard}"/>`;
+    for (let c = 0; c < cells; c++) {
+      const cy0 = Y0 + ((Y1 - Y0) / cells) * c;
+      for (const fr of [0.33, 0.67]) r += `<rect x="${xa - 0.5}" y="${cy0 + fr * ((Y1 - Y0) / cells) - hh / 2}" width="${t + 1}" height="${hh}" fill="${pal.bg}"/>`;
+    }
+    return r;
+  };
+  if (key === "spikes") {
+    s += wall();
+    const n = 3, pitch = (Y1 - Y0) / n, D = p.depth, taper = 1 - p.base;
+    for (let k = 0; k < n; k++) {
+      const cy = Y0 + pitch * (k + 0.5), top = [], bot = [];
+      for (let i = 0; i <= 40; i++) {
+        const z = i / 40, f = taper > 0 ? (z >= taper ? 1 : Math.pow(z / taper, p.taper)) : 1, x = X(D * (1 - z)), hw = (f * pitch) / 2;
+        top.push(`${x.toFixed(1)},${(cy - hw).toFixed(1)}`); bot.push(`${x.toFixed(1)},${(cy + hw).toFixed(1)}`);
+      }
+      s += `<polygon points="${top.join(" ")} ${X0},${(cy - pitch / 2).toFixed(1)} ${X0},${(cy + pitch / 2).toFixed(1)} ${bot.reverse().join(" ")}" fill="${pal.felt}" opacity="0.88"/>`;
+    }
+    s += arrow(W - 6);
+  } else if (key === "sponge") {
+    s += wall();
+    const D = p.depth, ds = D * (1 - p.gap), fr = extra.fractions;
+    fr.forEach((v, i) => { s += texture(X(D - ((i + 1) / fr.length) * ds), X(D - (i / fr.length) * ds), Y0, Y1, v, pal, i); });
+    if (p.gap > 0.02) s += `<text x="${(X0 + X(D * p.gap)) / 2}" y="${Y1 + 10}" text-anchor="middle" font-size="8" fill="${pal.muted}" font-family="sans-serif">air</text>`;
+    s += arrow(W - 6);
+  } else if (key === "hybrid") {
+    s += wall();
+    const D = p.depth, fd = D * p.front, cav = extra.cavity * 1000, fr = extra.fractions;
+    for (let c = 1; c < 4; c++) s += `<line x1="${X0}" x2="${X(cav)}" y1="${Y0 + ((Y1 - Y0) / 4) * c}" y2="${Y0 + ((Y1 - Y0) / 4) * c}" stroke="${pal.hard}" stroke-width="1"/>`;
+    s += plate(X(cav), p.plate, p.hole, 4);
+    fr.forEach((v, i) => { s += texture(X(D - ((i + 1) / fr.length) * fd), X(D - (i / fr.length) * fd), Y0, Y1, v, pal, i); });
+    s += arrow(W - 6);
+  } else if (key === "cloud") {
+    const D = p.depth, cx = X0 + SPAN / 2, w = D * sc, xa = cx - w / 2, fr = extra.fractions;
+    s += `<line x1="4" x2="${W - 4}" y1="${Y0 - 8}" y2="${Y0 - 8}" stroke="${pal.hard}" stroke-width="2"/><line x1="${cx}" x2="${cx}" y1="${Y0 - 8}" y2="${Y0 + 4}" stroke="${pal.hard}"/>`;
+    fr.forEach((v, i) => { s += texture(xa + (i / fr.length) * w, xa + ((i + 1) / fr.length) * w, Y0 + 4, Y1 - 4, v, pal, i); });
+    s += arrow(W - 6) + arrow(6, 1);
+  } else if (key === "bottles") {
+    s += wall();
+    const D = p.depth, cells = 4, ch = (Y1 - Y0) / cells, depths = [D, D * p.ratio];
+    for (let c = 0; c < cells; c++) {
+      const y0 = Y0 + ch * c, d = depths[c % 2], back = D - d;
+      if (back > 0.5) s += `<rect x="${X0}" y="${y0}" width="${back * sc}" height="${ch}" fill="${pal.hard}" opacity="0.4"/>`;
+      if (p.fill > 0.01) s += texture(X(D - d * p.fill), X(D), y0 + 1, y0 + ch - 1, 0.8, pal, c);
+      if (c) s += `<line x1="${X0}" x2="${X(D)}" y1="${y0}" y2="${y0}" stroke="${pal.hard}" stroke-width="1.2"/>`;
+    }
+    s += plate(X(D), p.plate, p.hole, cells) + arrow(W - 6);
+  } else if (key === "coil") {
+    s += wall();
+    const D = p.depth, cells = 4, ch = (Y1 - Y0) / cells, lens = extra.lengths.map((l) => l * 1000);
+    for (let c = 0; c < cells; c++) {
+      const y0 = Y0 + ch * c, nL = Math.max(1, Math.ceil(lens[c] / D)), lh = (ch - 4) / nL;
+      let path = `M${X(D)} ${y0 + 2 + lh / 2}`, left = lens[c];
+      for (let k = 0; k < nL && left > 0; k++) {
+        const run = Math.min(D, left), y = y0 + 2 + lh * (k + 0.5);
+        path += ` H${(k % 2 === 0 ? X(D - run) : X(run)).toFixed(1)}`;
+        left -= run;
+        if (left > 0 && k + 1 < nL) path += ` V${(y + lh).toFixed(1)}`;
+      }
+      s += `<rect x="${X0}" y="${y0}" width="${D * sc}" height="${ch}" fill="${pal.hard}" opacity="0.16"/>`;
+      s += `<path d="${path}" fill="none" stroke="${pal.felt}" stroke-width="${Math.max(1, Math.min(lh * 0.6, p.width * sc))}" stroke-linejoin="round"/>`;
+      if (c) s += `<line x1="${X0}" x2="${X(D)}" y1="${y0}" y2="${y0}" stroke="${pal.hard}"/>`;
+    }
+    s += arrow(W - 6);
+  }
+  if (!ruler) s += `<text x="${W - 4}" y="${H - 4}" text-anchor="end" font-size="8" fill="${pal.muted}" font-family="monospace">${Math.round(maxDepth)} mm scale</text>`;
+  return s + "</svg>";
+}
+
+// ------------------------------------------------------------ explanations -
+const helmholtz = (holeMm, plateMm, porosity, depthM) => (343.2 / (2 * Math.PI)) * Math.sqrt(porosity / ((plateMm / 1000 + 0.85 * holeMm / 1000) * depthM));
+function explain(r) {
+  const p = r.params, m = p.porous ? E.FELTS[p.porous].name.toLowerCase() : null, out = [];
+  if (r.family === "spikes") {
+    out.push(`${mm(p.depth)} deep in ${m}: a ${mm(p.depth * p.base)} solid base, then spikes ${mm(p.depth * (1 - p.base))} long that taper ${p.taper > 1.5 ? "to sharp points" : p.taper < 0.8 ? "only near the tip" : "evenly"}.`);
+  } else if (r.family === "sponge") {
+    out.push(`${mm(p.depth * (1 - p.gap))} of ${m}${p.gap > 0.02 ? `, standing ${mm(p.depth * p.gap)} off the wall with air behind` : " against the wall"}.`);
+    out.push(`${pct(p.outer)} solid at the surface, ${pct(p.inner)} at the back: ${p.outer < p.inner - 0.1 ? "airy outside, dense inside, like moss" : p.outer > p.inner + 0.1 ? "a denser skin over an airy core" : "even all through"}.`);
+  } else if (r.family === "cloud") {
+    out.push(`A ${mm(p.depth)} hanging layer of ${m}, ${pct(p.outer)} solid at the faces and ${pct(p.inner)} in the middle. Both faces work.`);
+  } else if (r.family === "bottles") {
+    out.push(`A ${mm(p.plate)} ${E.RIGIDS[p.rigid].name.toLowerCase()} plate with ${fix(p.hole)} mm holes (${pct(p.porosity)} open).`);
+    out.push(`Cavities ${mm(p.depth)} and ${mm(p.depth * p.ratio)} deep, ${pct(p.fill)} filled with ${m}; they ring at about ${hz(helmholtz(p.hole, p.plate, p.porosity, p.depth / 1000))} and ${hz(helmholtz(p.hole, p.plate, p.porosity, (p.depth * p.ratio) / 1000))}.`);
+  } else if (r.family === "coil") {
+    const ls = r.extra.lengths;
+    out.push(`Four channels ${fix(p.width)} mm wide folded inside ${mm(p.depth)} of ${E.RIGIDS[p.rigid].name.toLowerCase()}.`);
+    out.push(`Unfolded: ${ls.map((l) => Math.round(l * 100) + " cm").join(", ")}. Each catches one low pitch: ${ls.map((l) => hz(343.2 / (4 * l))).join(", ")}.`);
+  } else if (r.family === "hybrid") {
+    out.push(`${mm(p.depth * p.front)} of ${m} sponge (${pct(p.outer)} → ${pct(p.inner)} solid) in front of a ${mm(p.plate)} plate with ${fix(p.hole)} mm holes.`);
+    out.push(`Behind it, a ${mm(r.extra.cavity * 1000)} air cavity that rings at about ${hz(helmholtz(p.hole, p.plate, p.porosity, r.extra.cavity))}.`);
+  }
+  out.push(`${fix(r.mass, 2)} kg of material per m²${r.mass > state.mass ? " (over your budget)" : ""}.`);
+  return out;
+}
+const isHang = (key) => E.FAMILY[key].mounting === "hanging";
+const scoreText = (r) => (isHang(r.family) ? `${r.score.toFixed(2)} m²/m²` : `${pct(Math.min(1, r.score))} caught`);
+const rankedWall = () => families().filter((f) => !isHang(f.key)).map((f) => current(f.key)).filter(Boolean).sort((a, b) => b.fitness - a.fitness);
+
+// --------------------------------------------------------------- canvas ----
+function renderCanvas() {
+  if (state.ws === "spaces") { renderSpacesCanvas(); return; }
+  View3D.detach();
+  const c = $("#canvas");
+  if (state.ws === "materials") { c.innerHTML = materialsCanvas(); bindMaterialsCanvas(); return; }
+  if (!state.porous.size) { c.innerHTML = `<div class="artboard"><h2>No soft materials selected</h2><p class="muted">Open the Materials workspace and pick at least one.</p></div>`; return; }
+  if (state.tool === "all") {
+    const wallRank = rankedWall().map((r) => r.family);
+    c.innerHTML = `<div class="artboard"><div class="card-head"><h2>All shape families</h2><span class="muted">${state.results ? "Grown with your settings" : "Seeds: press Grow shapes to evolve them"}</span></div>
+      <div class="art-grid">${families().map((f) => {
+        const r = current(f.key), rank = wallRank.indexOf(f.key);
+        const pill = !grown(f.key) ? '<span class="pill seed">seed</span>' : isHang(f.key) ? '<span class="pill hang">hanging, both faces</span>' : `<span class="pill ${rank === 0 ? "win" : ""}">#${rank + 1} on wall</span>`;
+        return `<button class="art-card" data-pick="${f.key}"><div class="row"><strong>${f.name}</strong>${pill}</div>
+          ${drawForm(f.key, r.params, r.extra, state.depth, { title: f.name })}
+          <div class="row"><span class="muted">${f.imitates}</span><span class="mono">${scoreText(r)}</span></div></button>`;
+      }).join("")}</div></div>`;
+    return;
+  }
+  const f = E.FAMILY[state.tool], r = current(f.key), weights = E.bandWeights(state.target);
+  const best = rankedWall().find((x) => x.family !== f.key);
+  const series = [{ label: f.name, color: "var(--accent)", alpha: r.alpha, bold: true }]
+    .concat(best ? [{ label: E.FAMILY[best.family].name + " (best other)", color: "#8a8e96", alpha: best.alpha, dashed: true }] : []);
+  c.innerHTML = `<div class="artboard"><div class="card-head"><h2>${f.name}</h2><span class="muted">Imitates ${f.imitates} · cross-section, ruler in mm</span></div>
+      <div class="big-drawing">${drawForm(f.key, r.params, r.extra, state.depth, { ruler: true, title: f.name })}</div>
+      <p>${f.idea}</p></div>
+    <div class="card"><div class="card-head"><h3>Which pitches it catches</h3><span class="hint">${isHang(f.key) ? "Both faces count, so the line can pass 1." : "100% = all sound caught at that pitch."} Orange bars: what your target cares about.</span></div>
+      <div class="chart-scroll">${lineChart(series, { yMax: isHang(f.key) ? 2 : 1, weights })}</div>
+      <div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join("")}</div></div>`;
+}
+$("#canvas").addEventListener("click", (e) => { const b = e.target.closest("[data-pick]"); if (b) { state.tool = b.dataset.pick; renderTools(); renderCanvas(); renderDock(); renderGuideTip(); } });
+
+const MAT_COLORS = ["#4a90e2", "#e6a23c", "#5bb67c", "#e46b5f", "#b07ce0", "#3fb8b0", "#d4d06a", "#f08fb0", "#8fa3ff", "#c98a5a", "#7fd1e8", "#a0c05a", "#d07ad0", "#bbbbbb"];
+function materialsCanvas() {
+  const keys = [...state.porous];
+  if (!keys.length) return `<div class="card"><h3>Pick materials in the Materials panel</h3></div>`;
+  const t = state.flatThick;
+  const series = keys.map((k, i) => ({ key: k, label: E.FELTS[k].name, color: MAT_COLORS[i % MAT_COLORS.length], ...E.flatLayer(k, t) }));
+  const w = E.bandWeights(state.target);
+  const scored = series.map((s) => ({ ...s, score: s.alpha.reduce((a, x, i) => a + x * w[i], 0) })).sort((a, b) => b.score - a.score);
+  const head = `<div class="card"><div class="card-head"><h3>Materials on their own: a flat ${t} mm layer on a wall</h3>
+      <label class="opt"><span class="muted">Thickness</span><input type="range" id="flat-t" min="10" max="150" step="5" value="${t}"><output class="mono">${t} mm</output></label></div>
+    <p class="hint">Before any shaping, how much of each pitch does the plain material catch? The shapes in the Shapes workspace start from these.</p>`;
+  if (state.matView === "table") {
+    return head + `<div class="table-wrap"><table><thead><tr><th>Material</th><th>Group</th><th class="num">Catches (your target)</th><th class="num">Weight for ${t} mm</th><th class="num">Density</th><th class="num">CO₂ / kg</th><th class="num">€ / kg</th><th>Shapeable</th></tr></thead><tbody>
+      ${scored.map((s) => { const m = E.FELTS[s.key]; return `<tr><td>${esc(m.name)}</td><td>${m.group}</td><td class="num">${pct(s.score)}</td><td class="num">${fix(s.mass, 2)} kg/m²</td><td class="num">${m.density} kg/m³</td><td class="num">${m.carbon}</td><td class="num">${m.cost}</td><td>${m.formable ? "yes" : "flat"}</td></tr>`; }).join("")}
+      </tbody></table></div></div>`;
+  }
+  return head + `<div class="chart-scroll">${lineChart(series, { yMax: 1, weights: w })}</div>
+    <div class="legend">${series.map((s) => `<span><i style="background:${s.color}"></i>${esc(s.label)}</span>`).join("")}</div></div>
+    <div class="card"><h3>Ranking for “${TARGET_INFO[state.target].label}” at ${t} mm</h3>
+      <div class="bars">${scored.map((s) => `<div class="bar-row"><span>${esc(s.label)}</span><div class="track"><i style="width:${s.score * 100}%"></i></div><span class="mono">${pct(s.score)}</span></div>`).join("")}</div></div>`;
+}
+function bindMaterialsCanvas() {
+  const r = $("#flat-t");
+  if (r) r.oninput = (e) => { state.flatThick = Number(e.target.value); renderCanvas(); $("#flat-t").focus(); };
+}
+
+// ----------------------------------------------------------------- dock ----
+function renderDock() {
+  const d = $("#dock");
+  if (state.ws === "shapes") d.innerHTML = propertiesPanel() + layersPanel();
+  else if (state.ws === "materials") d.innerHTML = materialsPanel() + rigidPanel();
+  else d.innerHTML = spacesPanel() + spacePropsPanel() + absorbersPanel();
+  bindDock();
+}
+function propertiesPanel() {
+  if (state.tool === "all") {
+    const w = rankedWall(), top = w[0], cloud = state.hang ? current("cloud") : null;
+    return `<details class="panel" open id="panel-props"><summary>Properties</summary><div class="panel-body">
+      ${state.results && top ? `<h4>Best on the wall: ${E.FAMILY[top.family].name}</h4><p>${scoreText(top)} of your target sound.${w[1] && top.score - w[1].score < 0.03 ? ` ${E.FAMILY[w[1].family].name} is almost as good, so choose on looks, cost or making.` : ""}</p>
+        ${cloud ? `<p class="hint">If it can hang: the cloud gives ${cloud.score.toFixed(2)} m² of absorption per m² (both faces).</p>` : ""}`
+        : `<p>These are <strong>seeds</strong>: one average version of each shape family. Press <strong>Grow shapes</strong> to evolve them under your limits.</p>`}
+      <p class="hint">Pick a shape on the artboard, in the toolbar or in Layers to inspect it.</p></div></details>`;
+  }
+  const f = E.FAMILY[state.tool], r = current(f.key);
+  return `<details class="panel" open id="panel-props"><summary>Properties</summary><div class="panel-body">
+    <h4>${f.name} ${grown(f.key) ? "" : '<span class="muted">(seed)</span>'}</h4>
+    <ul class="plain">${explain(r).map((t) => `<li>${esc(t)}</li>`).join("")}</ul>
+    <dl class="facts"><dt>Score</dt><dd>${scoreText(r)}</dd><dt>Depth</dt><dd>${mm(r.params.depth)}</dd><dt>Material</dt><dd>${fix(r.mass, 2)} kg/m²</dd>
+      ${r.params.porous ? `<dt>Soft</dt><dd>${esc(E.FELTS[r.params.porous].name)}</dd>` : ""}${r.params.rigid ? `<dt>Hard</dt><dd>${esc(E.RIGIDS[r.params.rigid].name)}</dd>` : ""}</dl>
+    <div class="chips"><button class="chip" data-ask="Explain the ${esc(f.name)} design in simple words. Why does it work and what would you change?">Ask the guide</button>
+      ${r.params.porous ? '<button class="chip" id="rank-mats">Try every material</button>' : ""}
+      <button class="chip" id="save-svg" hidden>Save drawing (SVG)</button><button class="chip" id="save-csv" hidden>Save curves (CSV)</button>
+      <button class="chip" id="use-in-space">Use in Spaces</button></div>
+    <div id="ranking">${state.ranking && state.ranking.family === f.key ? rankingHTML() : ""}</div></div></details>`;
+}
+function layersPanel() {
+  const wall = rankedWall(), list = [...wall, ...families().filter((f) => isHang(f.key)).map((f) => current(f.key))];
+  return `<details class="panel" open id="panel-layers"><summary>Layers</summary><div class="panel-body">
+    ${list.map((r, i) => `<button class="layer" data-pick-layer="${r.family}" aria-pressed="${state.tool === r.family}">
+      <span class="thumb">${drawForm(r.family, r.params, r.extra, state.depth)}</span>
+      <span><strong>${E.FAMILY[r.family].name}</strong><small>${isHang(r.family) ? "hanging" : "#" + (i + 1) + " on wall"}${grown(r.family) ? "" : " · seed"}</small></span>
+      <span class="mono">${scoreText(r)}</span></button>`).join("")}</div></details>`;
+}
+function materialsPanel() {
+  return `<details class="panel" open id="panel-materials"><summary>Soft materials</summary><div class="panel-body">
+    <div class="chips"><button class="chip" data-preset="all">Everything</button><button class="chip" data-preset="nature">Nature only</button>
+      <button class="chip" data-preset="recycled">Recycled only</button><button class="chip" data-preset="shapeable">Can be shaped</button></div>
+    ${GROUP_ORDER.map((g) => `<div><span class="kicker">${g}</span>${Object.entries(E.FELTS).filter(([, m]) => m.group === g).map(([k, m]) => `
+      <label class="matrow"><input type="checkbox" data-porous="${k}" ${state.porous.has(k) ? "checked" : ""}>
+        <span>${esc(m.name)}<small>${esc(m.note)}</small></span><span class="mono hint">${m.density}</span></label>`).join("")}</div>`).join("")}
+    <p class="hint">Numbers on the right: density in kg/m³. Lighter materials let you fill more depth within your budget.</p></div></details>`;
+}
+function rigidPanel() {
+  return `<details class="panel" id="panel-rigid"><summary>Hard materials</summary><div class="panel-body">
+    <p class="hint">Used for plates, bottle resonators and coiled channels.</p>
+    ${Object.entries(E.RIGIDS).map(([k, m]) => `<label class="matrow"><input type="checkbox" data-rigid="${k}" ${state.rigid.has(k) ? "checked" : ""}>
+      <span>${esc(m.name)}<small>${esc(m.note)}</small></span><span class="mono hint">${m.density}</span></label>`).join("")}</div></details>`;
+}
+function rankingHTML() {
+  const { family, rows } = state.ranking, hang = isHang(family), max = hang ? 2 : 1;
+  return `<div class="bars"><span class="kicker">Best version in each material</span>${rows.map((r) => `<div class="bar-row"><span ${r.mass > state.mass ? 'class="muted"' : ""}>${esc(E.FELTS[r.params.porous].name)}</span>
+    <div class="track"><i style="width:${Math.min(100, (r.score / max) * 100)}%"></i></div><span class="mono">${hang ? r.score.toFixed(2) : pct(r.score)}</span></div>`).join("")}</div>`;
+}
+function bindDock() {
+  $$("[data-pick-layer]").forEach((b) => b.onclick = () => { state.tool = b.dataset.pickLayer; renderTools(); renderCanvas(); renderDock(); renderGuideTip(); });
+  $$("[data-porous]").forEach((c) => c.onchange = () => { toggle(state.porous, c.dataset.porous); afterMaterials(); });
+  $$("[data-rigid]").forEach((c) => c.onchange = () => { if (state.rigid.size === 1 && state.rigid.has(c.dataset.rigid)) { c.checked = true; return; } toggle(state.rigid, c.dataset.rigid); afterMaterials(); });
+  $$("[data-preset]").forEach((b) => b.onclick = () => {
+    const pick = { all: () => true, nature: (m) => ["Plant", "Animal", "Fungus"].includes(m.group), recycled: (m) => m.group === "Recycled", shapeable: (m) => m.formable }[b.dataset.preset];
+    state.porous = new Set(Object.entries(E.FELTS).filter(([, m]) => pick(m)).map(([k]) => k));
+    afterMaterials();
+  });
+  if ($("#rank-mats")) $("#rank-mats").onclick = () => rankMaterials(state.tool);
+  if ($("#use-in-space")) $("#use-in-space").onclick = () => { const sp = curSpace(); if (sp) addPlacement(sp, state.tool); setWorkspace("spaces"); };
+  if (state.ws === "shapes" && state.tool !== "all") setupDownloads(state.tool, current(state.tool));
+  if (state.ws === "spaces") bindSpacesDock();
+}
+const toggle = (set, k) => (set.has(k) ? set.delete(k) : set.add(k));
+function afterMaterials() { briefChanged(); renderDock(); renderCanvas(); renderStatus(); }
+
+// --------------------------------------------------------------- growing ---
+async function grow() {
+  if (state.growing || !state.porous.size) return;
+  state.growing = true; state.ranking = null; state.progress = 0; updateOutputs();
+  const b = brief(), fams = families();
+  const breeders = fams.map((f) => E.breeder(f, b, { population: 24, generations: 16, seed: state.seed }));
+  state.seed += 1;
+  const partial = [];
+  while (breeders.some((x) => !x.done)) {
+    for (const br of breeders) if (!br.done) br.step();
+    state.results = breeders.map((br) => br.best).filter(Boolean);
+    state.progress = Math.min(1, breeders[0].generation / breeders[0].generations);
+    renderCanvas(); renderStatus();
+    if (state.ws === "shapes") renderDock();
+    await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+  }
+  state.results = breeders.map((br) => br.best);
+  state.growing = false; state.progress = 1;
+  updateOutputs(); renderAll();
+  addMsg("note", `Grown. Best on the wall: ${E.FAMILY[rankedWall()[0].family].name}. Click any shape to inspect it.`);
+}
+
+async function rankMaterials(key) {
+  const fam = E.FAMILY[key], mats = [...state.porous], out = [], btn = $("#rank-mats");
+  for (let i = 0; i < mats.length; i++) {
+    if (btn) { btn.disabled = true; btn.textContent = `Trying ${i + 1}/${mats.length}…`; }
+    const br = E.breeder(fam, { ...brief(), porous: [mats[i]] }, { population: 16, generations: 10, seed: 7 });
+    while (!br.done) br.step();
+    out.push(br.best);
+    await new Promise((r) => setTimeout(r, 0));
+  }
+  state.ranking = { family: key, rows: out.sort((a, b) => b.fitness - a.fitness) };
+  if (state.ws === "shapes" && state.tool === key) renderDock();
+}
+
+// ------------------------------------------------------------- downloads ---
+let downloads = null;
+function setupDownloads(key, r) {
+  if (!downloads || !$("#save-svg")) return;
+  $("#save-svg").hidden = false; $("#save-csv").hidden = false;
+  $("#save-svg").onclick = (e) => saveFile(`biothing-${key}.svg`, drawForm(key, r.params, r.extra, state.depth, { ruler: true, title: E.FAMILY[key].name }), e.target);
+  $("#save-csv").onclick = (e) => {
+    const fams = families();
+    const rows = [["frequency_hz", ...fams.map((f) => f.key)]];
+    E.FREQS.forEach((f, i) => rows.push([f, ...fams.map((x) => current(x.key).alpha[i].toFixed(4))]));
+    saveFile("biothing-curves.csv", rows.map((x) => x.join(",")).join("\n"), e.target);
+  };
+}
+async function saveFile(filename, data, btn) {
+  const label = btn.textContent;
+  try { await downloads.save({ filename, data }); btn.textContent = "Saved"; } catch (e) { btn.textContent = e && e.code === "declined" ? label : "Could not save"; }
+  setTimeout(() => { btn.textContent = label; }, 2500);
+}
+
+// ---------------------------------------------------------------- spaces ---
+function makeSpace(name, mesh, finishes, people, kind, size) {
+  const sp = { id: state.nextId++, name, mesh, info: R.analyze(mesh), finishes: { ...finishes }, people, kind, size, volumeOverride: null, placements: [] };
+  state.spaces.push(sp);
+  state.spaceId = sp.id;
+  return sp;
+}
+function addPreset(key) {
+  const p = R.PRESETS.find((x) => x.key === key);
+  makeSpace(p.name, R.boxMesh(...p.size), { floor: p.floor, wall: p.wall, ceiling: p.ceiling }, p.people, "box", p.size.slice());
+  renderAll();
+}
+function importOBJ(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const mesh = R.parseOBJ(String(reader.result), { yUp: state.yUp });
+      const sp = makeSpace(file.name.replace(/\.obj$/i, ""), mesh, { floor: "concrete", wall: "plasterboard", ceiling: "plaster" }, 50, "import");
+      const a = sp.info.areas;
+      addMsg("note", `Imported “${sp.name}”: ${fix(sp.info.volume, 0)} m³, floor ${fix(a.floor, 0)} m², walls ${fix(a.wall, 0)} m², ceiling ${fix(a.ceiling, 0)} m².` +
+        (a.floor < 0.05 * sp.info.total ? " The floor looks tiny: if the model came from Blender or SketchUp, tick “Model is Y-up” and import again." : ""));
+      renderAll();
+    } catch (err) { addMsg("note", "Could not read that file: " + err.message + " Export the room as OBJ with closed surfaces."); }
+  };
+  reader.readAsText(file);
+  $("#import-file").value = "";
+}
+const curSpace = () => state.spaces.find((s) => s.id === state.spaceId);
+const spaceVolume = (sp) => sp.volumeOverride || sp.info.volume;
+function effAlpha(sp, pl) {
+  const oct = R.thirdToOctave(current(pl.family).alpha);
+  return isHang(pl.family) ? oct : oct.map((a, i) => Math.max(0, a - R.SURFACES[sp.finishes.wall].alpha[i]));
+}
+function spaceCalc(sp) {
+  const space = { volume: spaceVolume(sp), areas: sp.info.areas, finishes: sp.finishes, people: sp.people };
+  const abs = sp.placements.filter((pl) => current(pl.family)).map((pl) => ({ area: pl.area, alpha: effAlpha(sp, pl) }));
+  return { space, res: R.reverb(space, abs), abs };
+}
+function verdict(rt, target) {
+  if (rt > target * 1.2) return ["bad", "too echoey"];
+  if (rt < target * 0.7) return ["warn", "very dry"];
+  return ["ok", "good"];
+}
+function addPlacement(sp, family) {
+  const { space, abs } = spaceCalc(sp);
+  const need = R.areaNeeded(space, effAlpha(sp, { family }), abs);
+  sp.placements.push({ family, area: Math.max(1, Math.round(need || 10)) });
+}
+
+function renderSpacesCanvas() {
+  const c = $("#canvas"), sp = curSpace();
+  if (!sp) { View3D.detach(); c.innerHTML = `<div class="card"><h3>No spaces yet</h3><p class="hint">Add a ready-made room or import your own OBJ model from the options bar.</p></div>`; return; }
+  const { res } = spaceCalc(sp);
+  const [cls, word] = verdict(res.speechRtAfter, res.target);
+  const absArea = sp.placements.reduce((a, p) => a + p.area, 0);
+  c.innerHTML = `<div id="vp-slot"></div>
+    <div class="kpis">
+      <div class="kpi"><span class="kicker">Echo now (voice range)</span><b>${fix(res.speechRtBefore, 2)} s</b><span class="hint">reverberation time</span></div>
+      <div class="kpi"><span class="kicker">With absorbers</span><b>${fix(res.speechRtAfter, 2)} s</b><span><span class="status-pill ${cls}">${word}</span></span></div>
+      <div class="kpi"><span class="kicker">Recommended</span><b>${fix(res.target, 2)} s</b><span class="hint">for talking, from room volume</span></div>
+      <div class="kpi"><span class="kicker">Crowd noise</span><b>${res.noiseDrop > 0.05 ? "−" + fix(res.noiseDrop, 1) : "0.0"} dB</b><span class="hint">${fix(absArea, 0)} m² of absorbers</span></div>
+    </div>
+    <div class="card"><div class="card-head"><h3>Reverberation by pitch: ${esc(sp.name)}</h3>
+      <div class="legend"><span><i class="box" style="background:#6a6e76"></i>now</span><span><i class="box" style="background:var(--accent)"></i>with absorbers</span><span><i style="background:var(--signal)"></i>recommended</span></div></div>
+      <div class="chart-scroll">${rtChart(res)}</div>
+      <p class="hint">Reverberation time is how long a sound takes to die away. Shorter means calmer and clearer speech, until it feels “dead”.</p></div>
+    <div class="card"><h3>All your spaces</h3><div class="table-wrap"><table><thead><tr><th>Space</th><th class="num">Volume</th><th class="num">Echo now</th><th class="num">With absorbers</th><th class="num">Recommended</th><th class="num">Absorbers</th><th class="num">Noise</th><th>Verdict</th></tr></thead><tbody>
+      ${state.spaces.map((s) => { const r2 = spaceCalc(s).res, [c2, w2] = verdict(r2.speechRtAfter, r2.target);
+        return `<tr class="${s.id === sp.id ? "current" : ""}"><td>${esc(s.name)}</td><td class="num">${fix(spaceVolume(s), 0)} m³</td><td class="num">${fix(r2.speechRtBefore, 2)} s</td><td class="num">${fix(r2.speechRtAfter, 2)} s</td><td class="num">${fix(r2.target, 2)} s</td><td class="num">${fix(s.placements.reduce((a, p) => a + p.area, 0), 0)} m²</td><td class="num">−${fix(Math.max(0, r2.noiseDrop), 1)} dB</td><td><span class="status-pill ${c2}">${w2}</span></td></tr>`; }).join("")}
+      </tbody></table></div></div>`;
+  View3D.attach($("#vp-slot"), sp);
+}
+
+function spacesPanel() {
+  return `<details class="panel" open id="panel-spaces"><summary>Spaces</summary><div class="panel-body">
+    ${state.spaces.map((s) => `<button class="space-item" data-space="${s.id}" aria-pressed="${s.id === state.spaceId}"><span>${esc(s.name)}<br><small class="muted">${s.kind === "import" ? "imported model" : s.size.join(" × ") + " m"}</small></span><span class="mono hint">${fix(spaceVolume(s), 0)} m³</span></button>`).join("") || '<p class="hint">No spaces yet.</p>'}
+    ${state.spaces.length > 1 ? '<button class="btn small" id="remove-space">Remove selected space</button>' : ""}</div></details>`;
+}
+function spacePropsPanel() {
+  const sp = curSpace();
+  if (!sp) return "";
+  const opts = (use, val) => Object.entries(R.SURFACES).filter(([, m]) => m.use === use).map(([k, m]) => `<option value="${k}" ${k === val ? "selected" : ""}>${m.name}</option>`).join("");
+  const a = sp.info.areas;
+  return `<details class="panel" open id="panel-space-props"><summary>Space properties</summary><div class="panel-body">
+    <div class="formgrid">
+      <label for="sp-name">Name</label><input type="text" id="sp-name" value="${esc(sp.name)}">
+      ${sp.kind === "box" ? ["Length", "Width", "Height"].map((l, i) => `<label for="sp-dim-${i}">${l} (m)</label><input type="number" id="sp-dim-${i}" data-dim="${i}" min="2" max="200" step="0.5" value="${sp.size[i]}">`).join("") : ""}
+      <label for="sp-floor">Floor (${fix(a.floor, 0)} m²)</label><select id="sp-floor" data-fin="floor">${opts("floor", sp.finishes.floor)}</select>
+      <label for="sp-wall">Walls (${fix(a.wall, 0)} m²)</label><select id="sp-wall" data-fin="wall">${opts("wall", sp.finishes.wall)}</select>
+      <label for="sp-ceiling">Ceiling (${fix(a.ceiling, 0)} m²)</label><select id="sp-ceiling" data-fin="ceiling">${opts("ceiling", sp.finishes.ceiling)}</select>
+      <label for="sp-people">Visitors at once</label><input type="number" id="sp-people" min="0" max="5000" step="5" value="${sp.people}">
+      <label for="sp-vol">Volume (m³)</label><input type="number" id="sp-vol" min="1" step="1" value="${Math.round(spaceVolume(sp))}">
+    </div>
+    ${sp.kind === "import" ? '<p class="hint">Volume comes from the model. If the model is not closed, type the real volume here.</p>' : ""}</div></details>`;
+}
+function absorbersPanel() {
+  const sp = curSpace();
+  if (!sp) return "";
+  const { space, abs } = spaceCalc(sp);
+  const best = rankedWall()[0], cloud = state.hang ? current("cloud") : null;
+  const sugg = [best, cloud].filter(Boolean).map((r) => ({ r, need: R.areaNeeded(space, effAlpha(sp, { family: r.family }), abs) }));
+  return `<details class="panel" open id="panel-absorbers"><summary>Absorbers in this space</summary><div class="panel-body">
+    ${sp.placements.map((pl, i) => `<div class="placement"><select data-pl-fam="${i}" aria-label="Shape">${families().map((f) => `<option value="${f.key}" ${f.key === pl.family ? "selected" : ""}>${f.name}${grown(f.key) ? "" : " (seed)"}</option>`).join("")}</select>
+      <input type="number" data-pl-area="${i}" min="0" step="1" value="${pl.area}" aria-label="Area in square metres"><button class="btn small ghost" data-pl-del="${i}" aria-label="Remove">✕</button></div>`).join("") || '<p class="hint">No absorbers yet. Use a suggestion below or add one.</p>'}
+    ${sp.placements.length ? '<p class="hint">Numbers are m² of absorber. Wall shapes replace that much wall finish; clouds hang free.</p>' : ""}
+    ${sugg.map(({ r, need }) => need > 0.5 ? `<div class="suggest"><span>To reach the recommended echo with <strong>${E.FAMILY[r.family].name}</strong>: about <strong class="mono">${fix(need, 0)} m²</strong>${state.results ? "" : " (seed version, grow first for better shapes)"}.</span>
+      <button class="btn small primary" data-suggest="${r.family}" data-need="${Math.round(need)}">Add ${fix(need, 0)} m²</button></div>` : `<p class="hint">${E.FAMILY[r.family].name}: target already reached.</p>`).join("")}
+    <button class="btn small" id="add-placement">Add absorber</button></div></details>`;
+}
+function bindSpacesDock() {
+  $$("[data-space]").forEach((b) => b.onclick = () => { state.spaceId = Number(b.dataset.space); renderCanvas(); renderDock(); renderStatus(); });
+  const sp = curSpace();
+  if ($("#remove-space")) $("#remove-space").onclick = () => { state.spaces = state.spaces.filter((s) => s.id !== state.spaceId); state.spaceId = state.spaces[0]?.id ?? null; renderAll(); };
+  if (!sp) return;
+  const rerender = () => { renderCanvas(); renderStatus(); };
+  $("#sp-name").onchange = (e) => { sp.name = e.target.value || sp.name; renderDock(); rerender(); };
+  $$("[data-dim]").forEach((inp) => inp.onchange = () => {
+    const v = Math.min(200, Math.max(2, Number(inp.value) || sp.size[inp.dataset.dim]));
+    sp.size[inp.dataset.dim] = v; sp.mesh = R.boxMesh(...sp.size); sp.info = R.analyze(sp.mesh); sp.volumeOverride = null;
+    renderDock(); rerender();
+  });
+  $$("[data-fin]").forEach((s) => s.onchange = () => { sp.finishes[s.dataset.fin] = s.value; renderDock(); rerender(); });
+  $("#sp-people").onchange = (e) => { sp.people = Math.max(0, Number(e.target.value) || 0); renderDock(); rerender(); };
+  $("#sp-vol").onchange = (e) => { const v = Number(e.target.value); sp.volumeOverride = v > 0 && Math.abs(v - sp.info.volume) > 0.5 ? v : null; renderDock(); rerender(); };
+  $$("[data-pl-fam]").forEach((s) => s.onchange = () => { sp.placements[s.dataset.plFam].family = s.value; renderDock(); rerender(); });
+  $$("[data-pl-area]").forEach((s) => s.onchange = () => { sp.placements[s.dataset.plArea].area = Math.max(0, Number(s.value) || 0); renderDock(); rerender(); });
+  $$("[data-pl-del]").forEach((b) => b.onclick = () => { sp.placements.splice(Number(b.dataset.plDel), 1); renderDock(); rerender(); });
+  $$("[data-suggest]").forEach((b) => b.onclick = () => { sp.placements.push({ family: b.dataset.suggest, area: Number(b.dataset.need) }); renderDock(); rerender(); });
+  $("#add-placement").onclick = () => { addPlacement(sp, (rankedWall()[0] || current("sponge")).family); renderDock(); rerender(); };
+}
+
+// ---------------------------------------------------------------- 3D view --
+const View3D = (() => {
+  const T = window.THREE;
+  let el = null, renderer, scene, camera, roomGroup, absGroup, space = null, raf = 0;
+  const orbit = { theta: -0.9, phi: 1.05, dist: 30, target: [0, 0, 0] };
+  function ensure() {
+    if (el) return el;
+    el = document.createElement("div");
+    el.className = "viewport";
+    if (!T) { el.innerHTML = '<div class="fallback">The 3D view could not load here. All the numbers below still work.</div>'; return el; }
+    renderer = new T.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.setClearColor(0x0f1012);
+    el.appendChild(renderer.domElement);
+    el.insertAdjacentHTML("beforeend", '<div class="hud">Drag to orbit · scroll or pinch to zoom</div>');
+    scene = new T.Scene();
+    camera = new T.PerspectiveCamera(45, 1, 0.1, 2000);
+    camera.up.set(0, 0, 1);
+    scene.add(new T.AmbientLight(0xffffff, 0.55));
+    const sun = new T.DirectionalLight(0xffffff, 0.75); sun.position.set(30, -20, 60); scene.add(sun);
+    roomGroup = new T.Group(); absGroup = new T.Group(); scene.add(roomGroup, absGroup);
+    const cv = renderer.domElement, pts = new Map();
+    let last = null, pinch = 0;
+    cv.addEventListener("pointerdown", (e) => { cv.setPointerCapture(e.pointerId); pts.set(e.pointerId, [e.clientX, e.clientY]); last = [e.clientX, e.clientY]; });
+    cv.addEventListener("pointermove", (e) => {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, [e.clientX, e.clientY]);
+      if (pts.size === 2) {
+        const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        if (pinch) zoom(pinch / d);
+        pinch = d; return;
+      }
+      orbit.theta -= (e.clientX - last[0]) * 0.008;
+      orbit.phi = Math.min(1.55, Math.max(0.08, orbit.phi - (e.clientY - last[1]) * 0.008));
+      last = [e.clientX, e.clientY]; draw();
+    });
+    const up = (e) => { pts.delete(e.pointerId); pinch = 0; };
+    cv.addEventListener("pointerup", up); cv.addEventListener("pointercancel", up);
+    cv.addEventListener("wheel", (e) => { e.preventDefault(); zoom(Math.exp(e.deltaY * 0.001)); }, { passive: false });
+    new ResizeObserver(() => draw()).observe(el);
+    return el;
+  }
+  function zoom(f) { orbit.dist = Math.min(600, Math.max(2, orbit.dist * f)); draw(); }
+  function draw() {
+    if (!renderer || !el.isConnected) return;
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      const w = el.clientWidth, h = el.clientHeight;
+      if (!w || !h) return;
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h; camera.updateProjectionMatrix();
+      const [tx, ty, tz] = orbit.target;
+      camera.position.set(tx + orbit.dist * Math.sin(orbit.phi) * Math.cos(orbit.theta), ty + orbit.dist * Math.sin(orbit.phi) * Math.sin(orbit.theta), tz + orbit.dist * Math.cos(orbit.phi));
+      camera.lookAt(tx, ty, tz);
+      renderer.render(scene, camera);
+    });
+  }
+  function clear(g) { while (g.children.length) { const c = g.children.pop(); c.geometry && c.geometry.dispose(); c.material && c.material.dispose(); } }
+  function buildRoom(sp) {
+    clear(roomGroup);
+    const look = { floor: [0x6f737a, 0.95], wall: [0xb9bdc4, 0.22], ceiling: [0xd4d7dc, 0.1] };
+    for (const tag of ["floor", "wall", "ceiling"]) {
+      const pos = [];
+      sp.mesh.tris.forEach((t, i) => { if (sp.mesh.tags[i] === tag) for (const p of t) pos.push(...p); });
+      if (!pos.length) continue;
+      const g = new T.BufferGeometry(); g.setAttribute("position", new T.Float32BufferAttribute(pos, 3)); g.computeVertexNormals();
+      const [color, opacity] = look[tag];
+      roomGroup.add(new T.Mesh(g, new T.MeshLambertMaterial({ color, transparent: opacity < 1, opacity, side: T.DoubleSide, depthWrite: opacity >= 1 })));
+      roomGroup.add(new T.LineSegments(new T.EdgesGeometry(g, 25), new T.LineBasicMaterial({ color: 0x8a8f98 })));
+    }
+  }
+  function buildAbsorbers(sp) {
+    clear(absGroup);
+    if (!state.showAbs) return;
+    const { min, max } = sp.info, W = max[0] - min[0], D = max[1] - min[1], H = max[2] - min[2];
+    const panel = 1.2;
+    for (const pl of sp.placements) {
+      const r = current(pl.family);
+      if (!r || pl.area <= 0) continue;
+      const n = Math.min(400, Math.ceil(pl.area / (panel * panel))), color = new T.Color(FAMILY_COLORS[pl.family]);
+      const depth = Math.max(0.03, r.params.depth / 1000);
+      const mat = new T.MeshLambertMaterial({ color });
+      if (isHang(pl.family)) {
+        const cols = Math.max(1, Math.round(Math.sqrt((n * W) / D))), rows = Math.ceil(n / cols);
+        for (let k = 0; k < n; k++) {
+          const i = k % cols, j = Math.floor(k / cols);
+          const m = new T.Mesh(new T.BoxGeometry(panel, panel, depth), mat);
+          m.position.set(min[0] + ((i + 0.5) / cols) * W, min[1] + ((j + 0.5) / rows) * D, min[2] + H * 0.82);
+          absGroup.add(m);
+        }
+      } else {
+        // Panels in rows along each wall, kept clear of the corners, filled from 1.4 m up.
+        const gap = 0.2, pitch = panel + gap;
+        const walls = [
+          { len: W, at: (t) => [min[0] + t, min[1] + depth / 2], rot: 0 },
+          { len: D, at: (t) => [max[0] - depth / 2, min[1] + t], rot: Math.PI / 2 },
+          { len: W, at: (t) => [max[0] - t, max[1] - depth / 2], rot: 0 },
+          { len: D, at: (t) => [min[0] + depth / 2, max[1] - t], rot: Math.PI / 2 },
+        ].map((w) => ({ ...w, slots: Math.max(1, Math.floor((w.len - 0.3 + gap) / pitch)) }));
+        const rowsMax = Math.max(1, Math.floor((H - 1.4 - 0.2 + 0.15) / (panel + 0.15)));
+        let placed = 0;
+        for (let row = 0; row < rowsMax && placed < n; row++) {
+          for (const w of walls) {
+            const start = (w.len - (w.slots * pitch - gap)) / 2 + panel / 2;
+            for (let k = 0; k < w.slots && placed < n; k++, placed++) {
+              const [x, y] = w.at(start + k * pitch);
+              const m = new T.Mesh(new T.BoxGeometry(panel, depth, panel), mat);
+              m.position.set(x, y, min[2] + 1.4 + panel / 2 + row * (panel + 0.15)); m.rotation.z = w.rot;
+              absGroup.add(m);
+            }
+          }
+        }
+      }
+    }
+  }
+  function frame(sp, keepView) {
+    const { min, max } = sp.info;
+    orbit.target = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 3];
+    if (!keepView) orbit.dist = Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) * 1.35;
+  }
+  return {
+    attach(slot, sp) {
+      const v = ensure();
+      slot.replaceWith(v);
+      if (!T) return;
+      const changed = space !== sp;
+      space = sp;
+      buildRoom(sp); buildAbsorbers(sp);
+      if (changed) frame(sp, false);
+      draw();
+    },
+    detach() { if (el && el.isConnected) el.remove(); },
+    update() { if (space && T) { buildAbsorbers(space); draw(); } },
+    preset(k) {
+      if (!space || !T) return;
+      if (k === "top") { orbit.phi = 0.08; orbit.theta = -Math.PI / 2; }
+      else { orbit.theta = -0.9; orbit.phi = 1.05; frame(space, false); }
+      draw();
+    },
+  };
+})();
+
+// ------------------------------------------------------------- status bar --
+function renderStatus() {
+  const s = $("#status");
+  if (state.ws === "spaces") {
+    const sp = curSpace();
+    s.innerHTML = sp ? `<span>${esc(sp.name)}</span><span class="mono">${fix(spaceVolume(sp), 0)} m³</span><span>Model: statistical (Sabine) reverberation, for comparing options</span>` : "<span>No space selected</span>";
+    return;
+  }
+  const prog = state.growing ? `<span>Growing</span><span class="progress"><i style="width:${state.progress * 100}%"></i></span>` : `<span>${state.results ? "Grown" : "Seeds (not grown yet)"}</span>`;
+  s.innerHTML = `${prog}<span>${TARGET_INFO[state.target].label}</span><span class="mono">${mm(state.depth)} · ${state.mass} kg/m²</span>
+    <span>Soft layers catch well above ~${hz(E.quarterWave(state.depth))}</span><span>${state.porous.size} soft materials</span>`;
+}
+
+// ------------------------------------------------------------------ guide --
+const TIPS = {
+  shapes: { text: "Set what to quiet, the <strong>depth</strong> and the <strong>material budget</strong> in the bar above, then press <strong>Grow shapes</strong>. Pick any shape to inspect it.",
+    chips: ["Why did this shape win?", "How deep should it be?", "How would I make it?"] },
+  materials: { text: "Tick the materials you like. The chart shows each one as a plain flat layer, so you see the material before any shaping.",
+    chips: ["Which material is best for me?", "Explain the chart", "Which are the most natural?"] },
+  spaces: { text: "Add your exhibition areas (or import a 3D model), set the finishes and visitors, then place grown shapes. Aim for the <strong>recommended</strong> echo.",
+    chips: ["Is my space too echoey?", "How many m² do I need?", "Where should absorbers go?"] },
+};
+function renderGuideTip() {
+  const t = TIPS[state.ws];
+  $("#guide-tip").innerHTML = t.text;
+  $("#ask-chips").innerHTML = t.chips.map((c) => `<button class="chip" type="button" data-ask="${esc(c)}">${esc(c)}</button>`).join("");
+}
+document.addEventListener("click", (e) => { const c = e.target.closest("[data-ask]"); if (c) ask(c.dataset.ask); });
+
+const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing), compares materials, and tests the shapes in 3D models of exhibition spaces. The person is a designer, not an acoustic engineer.
+How to answer:
+- Simple, everyday words; explain any technical word in a few words the first time.
+- Short: at most about 120 words unless asked for more. Short paragraphs or a few bullets.
+- Refer to what is on their screen (workspace, toolbar, options bar, panels: Properties, Layers, Materials, Spaces, Absorbers) and say which control to use.
+- The numbers come from simplified physics (porous-material, resonator and tube models; Sabine reverberation). Good for comparing ideas; real objects and rooms should be tested. Mention this only when it matters.
+- Answer in the language the person writes in.`;
+function pageState() {
+  const lines = [`Workspace: ${state.ws}`, `Target: ${TARGET_INFO[state.target].label} (${TARGET_INFO[state.target].example})`,
+    `Depth: ${state.depth} mm (soft layers catch above ~${hz(E.quarterWave(state.depth))}); material budget ${state.mass} kg/m2; hanging allowed: ${state.hang ? "yes" : "no"}`,
+    `Soft materials: ${[...state.porous].map((k) => E.FELTS[k].name).join(", ") || "none"}`,
+    `Hard materials: ${[...state.rigid].map((k) => E.RIGIDS[k].name).join(", ")}`,
+    state.results ? "Shapes (grown):" : "Shapes (seeds, not grown yet):"];
+  for (const f of families()) { const r = current(f.key); if (r) lines.push(`- ${f.name}: ${scoreText(r)}; ${explain(r).join(" ")}`); }
+  if (state.ws === "shapes" && state.tool !== "all") lines.push(`Inspecting: ${E.FAMILY[state.tool].name}`);
+  if (state.ranking) lines.push(`Material ranking for ${E.FAMILY[state.ranking.family].name}: ${state.ranking.rows.map((r) => `${E.FELTS[r.params.porous].name} ${pct(r.score)}`).join(", ")}`);
+  for (const s of state.spaces) {
+    const { res } = spaceCalc(s);
+    lines.push(`Space "${s.name}"${s.id === state.spaceId ? " (selected)" : ""}: ${fix(spaceVolume(s), 0)} m3, floor ${R.SURFACES[s.finishes.floor].name}, walls ${R.SURFACES[s.finishes.wall].name}, ceiling ${R.SURFACES[s.finishes.ceiling].name}, ${s.people} visitors; reverberation 500-1000 Hz now ${fix(res.speechRtBefore, 2)} s, with absorbers ${fix(res.speechRtAfter, 2)} s, recommended ${fix(res.target, 2)} s; absorbers: ${s.placements.map((p) => `${p.area} m2 ${E.FAMILY[p.family].name}`).join(", ") || "none"}; crowd noise drop ${fix(Math.max(0, res.noiseDrop), 1)} dB`);
+  }
+  return lines.join("\n");
+}
+let sample = null, turns = [], ctl = null;
+const ERR = { not_granted: "The guide needs your permission to use Claude. Everything else keeps working.", sampling_disabled: "Claude is not available for this account here.",
+  rate_limited: "Too many questions at once. Wait a moment, then ask again.", session_expired: "Please sign in to Claude again.", refused: "The guide could not answer that. Try asking differently.",
+  empty_completion: "No answer came back. Try a simpler question.", prompt_too_large: "That was too much at once. Ask a shorter question." };
+function addMsg(cls, text) {
+  const el = document.createElement("div");
+  el.className = "msg " + cls; el.textContent = text;
+  $("#log").append(el); $("#log").scrollTop = $("#log").scrollHeight;
+  return el;
+}
+async function ask(q) {
+  q = (q || "").trim();
+  if (!q) return;
+  if (!sample) { addMsg("note", "The live guide is not available in this view. Open the page on claude.ai to ask questions."); return; }
+  if (ctl) return;
+  addMsg("user", q); turns.push({ role: "user", content: q });
+  const bubble = addMsg("bot", "Thinking…");
+  ctl = new AbortController(); $("#ask-stop").hidden = false; $("#ask-send").disabled = true;
+  try {
+    const { text } = await sample([{ role: "user", content: RULES + "\n\nWhat the person currently sees:\n" + pageState() },
+      { role: "assistant", content: "Understood. I will guide them simply." }, ...turns.slice(-8)],
+      { cache: false, signal: ctl.signal, onText: ({ text: t }) => { bubble.textContent = t; $("#log").scrollTop = $("#log").scrollHeight; } });
+    turns.push({ role: "assistant", content: text });
+  } catch (e) {
+    const code = e && e.code;
+    bubble.textContent = code === "refused" ? "" : (e && e.text) || "";
+    if (!bubble.textContent) bubble.remove();
+    if (code !== "cancelled") addMsg("note", ERR[code] || "Something interrupted the answer. Try again.");
+    turns.pop();
+    if (code === "not_granted" || code === "sampling_disabled") sample = null;
+  } finally { ctl = null; $("#ask-stop").hidden = true; $("#ask-send").disabled = false; }
+}
+$("#ask-form").addEventListener("submit", (e) => { e.preventDefault(); const q = $("#ask-input").value; $("#ask-input").value = ""; ask(q); });
+$("#ask-input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#ask-form").requestSubmit(); } });
+$("#ask-stop").addEventListener("click", () => ctl && ctl.abort());
+
+// ------------------------------------------------------------------- tour --
+const TOUR = [
+  { ws: "shapes", sel: "#ws-tabs", title: "Three workspaces", text: "Shapes grows absorbers, Materials compares materials, Spaces tests them in 3D models of your exhibition areas. Like the workspaces in a design app." },
+  { ws: "shapes", sel: "#opt-target", title: "1. What to quiet", text: "Choose the noise you care about. Exhibition mix balances voices and crowd." },
+  { ws: "shapes", sel: "#opt-space", title: "2. Depth and material", text: "Depth decides which pitches can be caught: low pitches need depth. The material budget limits how much each shape may use." },
+  { ws: "shapes", sel: "#btn-grow", title: "3. Grow", text: "Every nature-inspired family evolves under the same limits: many variations, keep the best, mix, repeat." },
+  { ws: "shapes", sel: "#tools", title: "4. Tools = shape families", text: "Each tool is one family: spikes, sponge, cloud, bottles, coils, moss-on-shell. Click one to inspect it on the artboard." },
+  { ws: "shapes", sel: "#panel-layers", title: "5. Layers", text: "The grown shapes, ranked. Click any to open it; Properties explains it in plain words." },
+  { ws: "materials", sel: "#panel-materials", title: "6. Materials", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
+  { ws: "spaces", sel: "#panel-spaces", title: "7. Your spaces", text: "Each exhibition area is its own 3D model. Add a ready-made room, or import an OBJ from Rhino, SketchUp or Blender." },
+  { ws: "spaces", sel: "#panel-absorbers", title: "8. Place absorbers", text: "Add grown shapes to the space. The lab tells you how many m² reach the recommended echo, and how much the crowd noise drops." },
+  { ws: "spaces", sel: "#panel-guide", title: "9. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
+];
+let tourAt = -1;
+function tour(i) {
+  $$(".tour-focus").forEach((x) => x.classList.remove("tour-focus"));
+  const box = $("#tour");
+  if (i < 0 || i >= TOUR.length) { box.hidden = true; tourAt = -1; return; }
+  tourAt = i;
+  const step = TOUR[i];
+  if (state.ws !== step.ws) setWorkspace(step.ws);
+  const target = $(step.sel);
+  box.innerHTML = `<span class="kicker">Guided tour · ${i + 1} of ${TOUR.length}</span><h3>${step.title}</h3><p>${step.text}</p>
+    <div class="row"><button class="btn small ghost" id="tour-end">Close</button><span><button class="btn small" id="tour-back" ${i === 0 ? "disabled" : ""}>Back</button>
+    <button class="btn small primary" id="tour-next">${i === TOUR.length - 1 ? "Finish" : "Next"}</button></span></div>`;
+  box.hidden = false;
+  $("#tour-end").onclick = () => tour(-1); $("#tour-back").onclick = () => tour(i - 1); $("#tour-next").onclick = () => tour(i + 1);
+  if (target) {
+    target.classList.add("tour-focus");
+    target.scrollIntoView({ block: "nearest" });
+    const r = target.getBoundingClientRect(), bw = box.offsetWidth, bh = box.offsetHeight;
+    let top = r.bottom + 10, left = Math.min(Math.max(16, r.left), innerWidth - bw - 16);
+    if (top + bh > innerHeight - 10) top = Math.max(10, r.top - bh - 10);
+    if (r.left > innerWidth * 0.6) left = Math.max(16, r.left - bw - 12);
+    box.style.top = top + "px"; box.style.left = left + "px";
+  }
+  $("#tour-next").focus();
+}
+$("#tour-start").onclick = () => tour(0);
+$("#tour-start-2").onclick = () => tour(0);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && tourAt >= 0) tour(-1); });
+addEventListener("resize", () => { if (tourAt >= 0) tour(tourAt); });
+
+// ------------------------------------------------------------------- boot --
+refreshPreview();
+addPreset("gallery"); addPreset("hall");
+state.spaceId = state.spaces[0].id;
+renderAll();
+addMsg("bot", "Hi! I'm your guide. New here? Press “Guided tour” at the top right, or just ask me anything.");
+if (window.claude && window.claude.use) {
+  window.claude.use("sample").then((s) => { sample = s; });
+  window.claude.use("downloads").then((d) => { downloads = d; if (state.ws === "shapes" && state.tool !== "all") renderDock(); });
+}
+</script>

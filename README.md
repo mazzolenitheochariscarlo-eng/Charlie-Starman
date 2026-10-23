@@ -19,6 +19,33 @@ The screens belong to a **modular exhibition system**: a small family of module
 widths that tile common desk sizes, dry joints only (no glue or screws),
 one-person module mass, flat-pack transport and reuse across many events.
 
+## Biothing Sound Lab (web app)
+
+`webapp/` holds a browser app laid out like a creative-suite tool, with three workspaces:
+
+- **Shapes**: six nature-inspired absorber families (spikes, gradient sponge, hanging cloud,
+  bottle resonators, coiled channels, moss-on-a-shell) evolve under the same depth and
+  material budget. Inspect each one as a cross-section with its absorption curve.
+- **Materials**: 14 soft materials (plant, animal, fungus, recycled, mineral) and 5 hard
+  ones, compared as plain flat layers, plus "try every material on this shape".
+- **Spaces**: exhibition areas as 3D models (ready-made rooms, or your own `.obj` exports).
+  Set the finishes and visitor count, place grown shapes, and compare reverberation time
+  with the recommended value and the drop in crowd noise.
+
+A guided tour and a live guide panel (Claude, when opened on claude.ai) explain every step.
+
+```bash
+python3 webapp/build.py          # -> webapp/dist/biothing-sound-lab.html (one self-contained file)
+node webapp/engine.test.js       # browser engine matches the Python models
+node webapp/rooms.test.js        # room acoustics checks
+```
+
+`webapp/engine.js` is a line-for-line port of `biothing_acoustics/layers.py` and `forms.py`;
+`tests/test_forms.py` regenerates `webapp/reference.json` and runs both Node tests, so the two
+engines cannot drift apart. Room acoustics use Sabine's formula with typical finish data and a
+recommended reverberation for speech rooms after DIN 18041 (group A3). Good for comparing
+options, not a substitute for a measured or ray-traced study of a real hall.
+
 ## Quick start
 
 ```bash
