@@ -36,6 +36,39 @@
   }
   const seedOf = (g) => Math.floor(g.reduce((acc, x, i) => acc + x * 1e4 * (i + 1), 7)) >>> 0;
 
+  // ------------------------------------------------- shared by sound rules
+  // Plan of a sheet-like piece along its length s in [-L/2, L/2]: straight, arc, S-curve or zigzag
+  // (curved plans stand more easily). Returns the point, unit tangent and unit normal in plan.
+  function planCurve(plan, curv, L) {
+    const A = curv * L * 0.25, bend = Math.max(1e-3, curv * Math.PI * 0.9), Rc = L / bend;
+    return (s2) => {
+      let x = s2, y = 0, dy = 0;
+      if (plan === 1) { x = Rc * Math.sin(s2 / Rc); y = Rc * (1 - Math.cos(s2 / Rc)) - Rc * (1 - Math.cos(L / 2 / Rc)) / 2; dy = Math.tan(s2 / Rc); }
+      else if (plan === 2) { y = A * Math.sin((2 * Math.PI * s2) / L); dy = A * (2 * Math.PI / L) * Math.cos((2 * Math.PI * s2) / L); }
+      else if (plan === 3) { const ph = ((s2 / L + 0.5) * 4) % 2; y = A * (ph < 1 ? ph : 2 - ph) - A / 2; dy = (ph < 1 ? 1 : -1) * A * 4 / L; }
+      const tl = Math.hypot(1, dy), t = plan === 1 ? [Math.cos(s2 / Rc), Math.sin(s2 / Rc)] : [1 / tl, dy / tl];
+      return { p: [x, y], t, n: [-t[1], t[0]] };
+    };
+  }
+  // Bilinear sample of a field (nx x nz, values 0..1) at fractions u (along) and v (up), both 0..1.
+  function sampleField(F, nx, nz, u0, v0) {
+    if (nx < 2 || nz < 2) return F[0];
+    const u = Math.max(0, Math.min(nx - 1, u0 * (nx - 1))), v = Math.max(0, Math.min(nz - 1, v0 * (nz - 1)));
+    const i = Math.min(nx - 2, Math.floor(u)), k = Math.min(nz - 2, Math.floor(v)), fu = u - i, fv = v - k, q = (a, b) => F[a + nx * b];
+    return (q(i, k) * (1 - fu) + q(i + 1, k) * fu) * (1 - fv) + (q(i, k + 1) * (1 - fu) + q(i + 1, k + 1) * fu) * fv;
+  }
+  // Structure: feet across the piece with posts (freestanding), or hangers from the ceiling.
+  function footings(parts, curve, L, H, feet, footLen, down) {
+    for (let k = 0; k < feet; k++) {
+      const c = curve(-L / 2 + (L * (k + 0.5)) / feet), P = c.p;
+      if (down) { parts.push({ a: [P[0], P[1], 0], b: [P[0], P[1], -H * 0.85], r: 0.006, structure: true }); continue; }
+      parts.push({ a: [P[0] - c.n[0] * footLen, P[1] - c.n[1] * footLen, 0.012], b: [P[0] + c.n[0] * footLen, P[1] + c.n[1] * footLen, 0.012], r: 0.012, structure: true });
+      parts.push({ a: [P[0], P[1], 0.012], b: [P[0], P[1], H * 0.85], r: 0.01, structure: true });
+    }
+    return down ? `${feet} hangers` : `${feet} feet ${Math.round(footLen * 200)} cm long`;
+  }
+  const flatField = { data: new Float32Array(4).fill(0.5), nx: 2, nz: 2 };
+
   // ------------------------------------------------------------ growth rules
   // Each rule turns genes (numbers in [0, 1]) into capsules at an arbitrary scale.
   // `down` is true for hanging forms (growth points downwards).
@@ -286,28 +319,14 @@
       idea: "Sound draws the structure. Where the air moves most, cells grow smaller, thicker and closer; where it is calm, they open up. Each round the field is lowered where the membrane already absorbs, so growth spreads to where sound is still strong.",
       genes: ["plan", "curve", "cellMin", "cellMax", "contrast", "open", "thickMin", "thickMax", "fold", "louvre", "coupling", "rhythm", "feet", "foot"],
       build(g, down, ctx) {
-        const env = ctx.env, L = env.width, H = env.height, field = ctx.field || { data: new Float32Array(4).fill(0.5), nx: 2, nz: 2 };
+        const env = ctx.env, L = env.width, H = env.height, field = ctx.field || flatField;
         const plan = Math.floor(g[0] * 3.999), curv = g[1], rMin = lerp(0.05, 0.12, g[2]), rMax = lerp(0.14, 0.3, g[3]), gamma = lerp(0.5, 2.5, g[4]);
         const open = g[5], tMin = lerp(0.01, 0.03, g[6]), tMax = lerp(0.03, 0.08, g[7]), fold = lerp(0, 0.15, g[8]), louvre = lerp(0, 1.2, g[9]);
         const coupling = lerp(0, 2, g[10]), rhythmGain = g[11], feet = 2 + Math.floor(g[12] * 2.999), footLen = lerp(0.15, 0.45, g[13]);
         const rand = rng(seedOf(g)), { nx, nz } = field, F0 = Float32Array.from(field.data);
         const bpm = (field.rhythm && field.rhythm.bpm) || 0, strength = (field.rhythm && field.rhythm.strength) || 0;
         const period = bpm ? H / Math.max(2, Math.min(6, bpm / 30)) : H;
-        // Plan of the membrane: straight, arc, S-curve or zigzag (curved plans stand more easily).
-        const A = curv * L * 0.25, bend = Math.max(1e-3, curv * Math.PI * 0.9), Rc = L / bend;
-        const curve = (s2) => {
-          let x = s2, y = 0, dy = 0;
-          if (plan === 1) { x = Rc * Math.sin(s2 / Rc); y = Rc * (1 - Math.cos(s2 / Rc)) - Rc * (1 - Math.cos(L / 2 / Rc)) / 2; dy = Math.tan(s2 / Rc); }
-          else if (plan === 2) { y = A * Math.sin((2 * Math.PI * s2) / L); dy = A * (2 * Math.PI / L) * Math.cos((2 * Math.PI * s2) / L); }
-          else if (plan === 3) { const ph = ((s2 / L + 0.5) * 4) % 2; y = A * (ph < 1 ? ph : 2 - ph) - A / 2; dy = (ph < 1 ? 1 : -1) * A * 4 / L; }
-          const tl = Math.hypot(1, dy), t = plan === 1 ? [Math.cos(s2 / Rc), Math.sin(s2 / Rc)] : [1 / tl, dy / tl];
-          return { p: [x, y], t, n: [-t[1], t[0]] };
-        };
-        const at = (Fm, s2, z) => {
-          const u = Math.max(0, Math.min(nx - 1, (s2 / L + 0.5) * (nx - 1))), v = Math.max(0, Math.min(nz - 1, (z / H) * (nz - 1)));
-          const i = Math.min(nx - 2, Math.floor(u)), k = Math.min(nz - 2, Math.floor(v)), fu = u - i, fv = v - k, q = (a, b) => Fm[a + nx * b];
-          return nx < 2 ? Fm[0] : (q(i, k) * (1 - fu) + q(i + 1, k) * fu) * (1 - fv) + (q(i, k + 1) * (1 - fu) + q(i + 1, k + 1) * fu) * fv;
-        };
+        const curve = planCurve(plan, curv, L), at = (Fm, s2, z) => sampleField(Fm, nx, nz, (s2 / L + 0.5), z / H);
         const makeTiles = (Fm) => {
           const tiles = [];
           for (let a = 0; a < 2600 && tiles.length < 700; a++) {
@@ -344,21 +363,67 @@
           const near = centres.map((b, j) => [j, Math.hypot(...sub(a, b))]).filter(([j, d]) => j > i && d < (tiles[i].r + tiles[j].r) * 0.75).sort((x, y) => x[1] - y[1]).slice(0, 2);
           for (const [j] of near) parts.push({ a, b: centres[j], r: 0.004 });
         });
-        // Structure: feet across the membrane with posts (freestanding), or hangers from the ceiling.
-        const label = down ? `${feet} hangers` : `${feet} feet ${Math.round(footLen * 200)} cm long`;
-        for (let k = 0; k < feet; k++) {
-          const c = curve(-L / 2 + (L * (k + 0.5)) / feet), P = c.p;
-          if (down) { parts.push({ a: [P[0], P[1], 0], b: [P[0], P[1], -H * 0.85], r: 0.006, structure: true }); continue; }
-          parts.push({ a: [P[0] - c.n[0] * footLen, P[1] - c.n[1] * footLen, 0.012], b: [P[0] + c.n[0] * footLen, P[1] + c.n[1] * footLen, 0.012], r: 0.012, structure: true });
-          parts.push({ a: [P[0], P[1], 0.012], b: [P[0], P[1], H * 0.85], r: 0.01, structure: true });
-        }
-        parts.label = label;
+        parts.label = footings(parts, curve, L, H, feet, footLen, down);
         parts.field = Fm;
         return parts;
       },
       describe(g) {
         const plans = ["straight", "arched", "S-curved", "zigzag"];
         return `A ${plans[Math.floor(g[0] * 3.999)]} cellular membrane, cells ${Math.round(lerp(5, 12, g[2]))}-${Math.round(lerp(14, 30, g[3]))} cm, felt ${Math.round(lerp(10, 30, g[6]))}-${Math.round(lerp(30, 80, g[7]))} mm${g[10] > 0.2 ? ", grown over three rounds with the sound" : ""}.`;
+      },
+    },
+    // ---- after Biothing's New Museum ceiling: one flat laser-cut felt sheet whose cut pattern is drawn
+    // by an interference field. Flaps cut on three sides open out of the sheet, most where the air
+    // moves most. The felt's own stiffness decides how far a flap really stays open (material computation).
+    cutsheet: {
+      group: "sound", direct: true, name: "Interference cut-sheet", imitates: "Biothing's laser-cut ceiling at the New Museum: wave interference cut into flat sheets",
+      idea: "One flat felt sheet, cut only in 2D. Where sound is strong the flaps are larger and open further, so sound reaches both faces and more felt edge; where it is calm the sheet stays whole. Gravity and the felt's stiffness finish the shape.",
+      genes: ["plan", "curve", "cell", "cut", "open", "contrast", "sheet", "alternate", "hinge", "feet", "foot"],
+      build(g, down, ctx) {
+        const env = ctx.env, L = env.width, H = env.height, field = ctx.field || flatField, mat = ctx.material || { density: 120 };
+        const plan = Math.floor(g[0] * 3.999), a = lerp(0.08, 0.25, g[2]), cutMax = lerp(0.5, 0.92, g[3]), open = lerp(0.2, 1.4, g[4]), gamma = lerp(0.5, 2.5, g[5]);
+        const t = lerp(0.006, 0.02, g[6]), alternate = g[7] > 0.5, side = g[8] > 0.5, feet = 2 + Math.floor(g[9] * 2.999), footLen = lerp(0.15, 0.45, g[10]);
+        const curve = planCurve(plan, g[1], L), base = 0.06, nxc = Math.max(1, Math.round(L / a)), nzc = Math.max(1, Math.round((H - base) / a));
+        const cw = L / nxc, ch = (H - base) / nzc, zOf = (z) => (down ? z - H : z), parts = [], cells = [];
+        // Felt as a cantilever under its own weight: end slope 2·rho·g·l³ / (E·t²), with E rising with density
+        // (about 2 MPa for 200 kg/m³ PET felt). Top-hinged flaps sag closed; side hinges carry the load in plane.
+        const E = 50 * mat.density * mat.density, sag = (l) => (2 * mat.density * 9.81 * l * l * l) / (E * t * t);
+        const sheet = (s0, s1, z0, z1, extra) => {
+          if (s1 - s0 < 1e-3 || z1 - z0 < 1e-3) return;
+          const c = curve((s0 + s1) / 2);
+          parts.push({ c: [c.p[0], c.p[1], zOf((z0 + z1) / 2)], u: [c.t[0] * (s1 - s0) / 2, c.t[1] * (s1 - s0) / 2, 0], v: [0, 0, (z1 - z0) / 2], t, ...extra });
+        };
+        sheet(-L / 2, L / 2, 0, base);
+        let cutLength = 0, droopSum = 0, flaps = 0;
+        for (let k = 0; k < nzc; k++) for (let i = 0; i < nxc; i++) {
+          const s0 = -L / 2 + i * cw, z0 = base + k * ch, sc = s0 + cw / 2, zc = z0 + ch / 2;
+          const f = Math.pow(Math.max(0, Math.min(1, sampleField(field.data, field.nx, field.nz, sc / L + 0.5, zc / H))), gamma);
+          const frac = cutMax * f;
+          if (frac < 0.2) { sheet(s0, s0 + cw, z0, z0 + ch); cells.push({ s: sc, z: zc, w: 0, h: 0 }); continue; }
+          const w = cw * frac, h = ch * frac, wanted = open * f, lever = side ? 0 : h;
+          const ang = wanted / (1 + sag(lever) / Math.max(wanted, 0.05)), dir = alternate && (i + k) % 2 ? -1 : 1;
+          // the frame around the hole
+          sheet(s0, s0 + cw, z0, zc - h / 2); sheet(s0, s0 + cw, zc + h / 2, z0 + ch);
+          sheet(s0, sc - w / 2, zc - h / 2, zc + h / 2); sheet(sc + w / 2, s0 + cw, zc - h / 2, zc + h / 2);
+          // the flap, turned out of the sheet about its hinge
+          const c = curve(sc), n = [c.n[0] * dir, c.n[1] * dir];
+          if (side) {
+            const hc = curve(sc - w / 2), d = [c.t[0] * Math.cos(ang) + n[0] * Math.sin(ang), c.t[1] * Math.cos(ang) + n[1] * Math.sin(ang), 0];
+            parts.push({ c: [hc.p[0] + d[0] * w / 2, hc.p[1] + d[1] * w / 2, zOf(zc)], u: mul(d, w / 2), v: [0, 0, h / 2], t });
+          } else {
+            const d = [n[0] * Math.sin(ang), n[1] * Math.sin(ang), -Math.cos(ang)], top = zOf(zc + h / 2);
+            parts.push({ c: [c.p[0] + d[0] * h / 2, c.p[1] + d[1] * h / 2, top + d[2] * h / 2], u: [c.t[0] * w / 2, c.t[1] * w / 2, 0], v: mul(d, h / 2), t });
+          }
+          cutLength += side ? 2 * w + h : w + 2 * h; droopSum += 1 - ang / Math.max(wanted, 1e-6); flaps++;
+          cells.push({ s: sc, z: zc, w, h, open: ang, side, dir });
+        }
+        parts.label = footings(parts, curve, L, H, feet, footLen, down);
+        parts.cutPlan = { L, H, t, base, side, cells, cutLength, flaps, droop: flaps ? droopSum / flaps : 0 };
+        return parts;
+      },
+      describe(g) {
+        const plans = ["flat", "arched", "S-curved", "zigzag"];
+        return `A ${plans[Math.floor(g[0] * 3.999)]} ${Math.round(lerp(6, 20, g[6]))} mm felt sheet cut into ${Math.round(lerp(8, 25, g[2]))} cm cells, flaps ${g[8] > 0.5 ? "hinged at the side" : "hinged at the top"}${g[7] > 0.5 ? ", opening to both faces" : ""}.`;
       },
     },
   };
@@ -395,7 +460,7 @@
 
   function grow(rule, genes, opts) {
     const env = envelope(opts.size, opts.mount);
-    if (RULES[rule].direct) return RULES[rule].build(genes, opts.mount === "hanging", { env, field: opts.field });
+    if (RULES[rule].direct) return RULES[rule].build(genes, opts.mount === "hanging", { env, field: opts.field, material: opts.material });
     const parts = fit(RULES[rule].build(genes, opts.mount === "hanging"), env);
     return opts.mount === "standing" ? standUp(parts, genes.slice(RULES[rule].genes.length, RULES[rule].genes.length + STANCE), env) : parts;
   }
@@ -661,8 +726,14 @@
   }
 
   // Full evaluation of one genome. material: {sigma, density}.
-  function evaluate({ rule, genes, mount, size, material, budget, weights, structureDensity = 680, field = null }) {
-    const prims = grow(rule, genes, { mount, size, field });
+  function evaluate({ rule, genes, mount, size, material, budget, weights, structureDensity = 680, field = null, skin = null }) {
+    let prims = grow(rule, genes, { mount, size, field, material });
+    if (skin) {
+      const tufts = growSkin(prims, skin.field, skin.genes, envelope(size, mount), mount), merged = prims.concat(tufts);
+      for (const k of ["label", "field", "cutPlan"]) merged[k] = prims[k];
+      merged.skinCount = tufts.length;
+      prims = merged;
+    }
     const vox = voxelize(prims, C0 / BANDS[BANDS.length - 1] / CELLS_PER_WAVE);
     const mass = vox.volume * material.density;
     // Strip method: absorption per metre in two slices per direction, times the extent.
@@ -684,7 +755,7 @@
     const stance = mount === "standing" ? stability(prims, vox.com, mass, structureDensity) : null;
     if (stance && !stance.ok) fitness -= score * 0.8 * Math.min(1, (MIN_TIP_ANGLE - stance.angle) / MIN_TIP_ANGLE) + 0.05;
     return { rule, genes, mount, size, prims, mass, volume: vox.volume, area, score, fitness, perKg: score / Math.max(mass, 1e-6), stance,
-      holdfast: prims.label || null, fieldMap: prims.field || null };
+      holdfast: prims.label || null, fieldMap: prims.field || null, cutPlan: prims.cutPlan || null, skinCount: prims.skinCount || 0 };
   }
 
   // A flat 50 mm panel of the same material and mass on a wall, through the same solver,
@@ -734,28 +805,117 @@
   // Standing waves of a box room (its resonances): the Chladni-like pattern of air motion on a
   // vertical plane through the piece, summed over the room modes between fmin and fmax (the range of
   // voice fundamentals, whose waves are short enough to draw a pattern across a piece).
-  function fieldFromModes({ L, W, H, x0, y0, width, height, nx = 24, nz = 36, fmin = 70, fmax = 200, maxModes = 60, zBase = 0 }) {
-    const modes = [];
-    const N = (len) => Math.ceil((2 * len * fmax) / C0);
+  function roomModes(L, W, H, fmin, fmax, maxModes) {
+    const modes = [], N = (len) => Math.ceil((2 * len * fmax) / C0);
     for (let a = 0; a <= N(L); a++) for (let b = 0; b <= N(W); b++) for (let c = 0; c <= N(H); c++) {
       if (!a && !b && !c) continue;
       const f = (C0 / 2) * Math.hypot(a / L, b / W, c / H);
       if (f >= fmin && f <= fmax) modes.push({ n: [a, b, c], f });
     }
     modes.sort((p, q) => p.f - q.f);
-    const stride = Math.max(1, modes.length / maxModes), use = Array.from({ length: Math.min(maxModes, modes.length) }, (_, i) => modes[Math.floor(i * stride)]), data = new Float32Array(nx * nz);
-    for (const { n } of use) {
-      const kx = (n[0] * Math.PI) / L, ky = (n[1] * Math.PI) / W, kz = (n[2] * Math.PI) / H;
-      for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
-        const x = x0 - width / 2 + (i / (nx - 1)) * width, z = zBase + (k / (nz - 1)) * height;
-        const cx = Math.cos(kx * x), sx = Math.sin(kx * x), cy = Math.cos(ky * y0), sy = Math.sin(ky * y0), cz = Math.cos(kz * z), sz = Math.sin(kz * z);
-        data[i + nx * k] += (kx * sx * cy * cz) ** 2 + (ky * cx * sy * cz) ** 2 + (kz * cx * cy * sz) ** 2;
-      }
-    }
+    const stride = Math.max(1, modes.length / maxModes);
+    return Array.from({ length: Math.min(maxModes, modes.length) }, (_, i) => modes[Math.floor(i * stride)]);
+  }
+  // Squared air velocity of one mode at (x, y, z), up to a constant.
+  function modeVelocity2(n, L, W, H, x, y, z) {
+    const kx = (n[0] * Math.PI) / L, ky = (n[1] * Math.PI) / W, kz = (n[2] * Math.PI) / H;
+    const cx = Math.cos(kx * x), sx = Math.sin(kx * x), cy = Math.cos(ky * y), sy = Math.sin(ky * y), cz = Math.cos(kz * z), sz = Math.sin(kz * z);
+    return (kx * sx * cy * cz) ** 2 + (ky * cx * sy * cz) ** 2 + (kz * cx * cy * sz) ** 2;
+  }
+  const normalise01 = (data) => {
     let lo = Infinity, hi = -Infinity;
     for (const v of data) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
-    return { data: data.map((v) => (hi > lo ? (v - lo) / (hi - lo) : 0.5)), nx, nz, width, height, modes: use.map((m) => ({ n: m.n, f: m.f })) };
+    return data.map((v) => (hi > lo ? (v - lo) / (hi - lo) : 0.5));
+  };
+  function fieldFromModes({ L, W, H, x0, y0, width, height, nx = 24, nz = 36, fmin = 70, fmax = 200, maxModes = 60, zBase = 0 }) {
+    const use = roomModes(L, W, H, fmin, fmax, maxModes), data = new Float32Array(nx * nz);
+    for (const { n } of use) for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+      const x = x0 - width / 2 + (i / (nx - 1)) * width, z = zBase + (k / (nz - 1)) * height;
+      data[i + nx * k] += modeVelocity2(n, L, W, H, x, y0, z);
+    }
+    return { data: normalise01(data), nx, nz, width, height, modes: use.map((m) => ({ n: m.n, f: m.f })) };
   }
+
+  // ------------------------------------------------------ room placement ----
+  // "Probabilistic programme" (Biothing's tower): instead of one fixed layout, a map of the floor plan
+  // saying where a piece is likely to help, and layouts drawn from it. Two parts, weighted by what the
+  // room needs (need = shares of 125 ... 4000 Hz):
+  //  - low pitches (125-250 Hz): where the room's standing waves move the air most at ear height,
+  //    because porous felt only works where air moves (not against a wall, where it stands still);
+  //  - speech pitches (500 Hz up): a band 0.4-1.6 m in from the walls, where pieces meet the first
+  //    reflections and leave the middle free for visitors.
+  function placementMap({ lx, ly, H, need, nx = 40, z = 1.2, piece = 1.2 }) {
+    const ny = Math.max(4, Math.round((nx * ly) / lx)), low = new Float32Array(nx * ny), mid = new Float32Array(nx * ny);
+    const modes = roomModes(lx, ly, H, 30, 250, 80), at = (i, j) => [((i + 0.5) / nx) * lx, ((j + 0.5) / ny) * ly];
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const [x, y] = at(i, j);
+      let v = 0;
+      for (const { n } of modes) v += modeVelocity2(n, lx, ly, H, x, y, z);
+      low[i + nx * j] = v;
+      const d = Math.min(x, lx - x, y, ly - y);
+      mid[i + nx * j] = 0.35 + 0.65 * Math.exp(-(((d - 1.0) / 0.7) ** 2));
+    }
+    const L1 = normalise01(low), M1 = normalise01(mid), wl = (need[0] || 0) + (need[1] || 0), wm = Math.max(0, 1 - wl);
+    const data = new Float32Array(nx * ny);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const [x, y] = at(i, j), d = Math.min(x, lx - x, y, ly - y), idx = i + nx * j;
+      data[idx] = d < piece / 2 + 0.1 ? 0 : wl * L1[idx] + wm * M1[idx];
+    }
+    return { data: normalise01(data), nx, ny, lx, ly, low: L1, mid: M1, modes: modes.length };
+  }
+  // Draw n spots from the map, each at least `gap` from the others (relaxed if the room is full).
+  // Returns spots in metres from the room's corner and how much better they sit than an even spread.
+  function sampleLayout(map, n, seed, gap, sharp = 3) {
+    const rand = rng(seed), { nx, ny, lx, ly, data } = map, spots = [];
+    const cells = [];
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) if (data[i + nx * j] > 0) cells.push({ x: ((i + 0.5) / nx) * lx, y: ((j + 0.5) / ny) * ly, w: Math.pow(data[i + nx * j], sharp), v: data[i + nx * j] });
+    let g = gap;
+    while (spots.length < n && cells.length) {
+      const ok = cells.filter((c) => spots.every((p) => Math.hypot(p.x - c.x, p.y - c.y) >= g));
+      if (!ok.length) { g *= 0.8; if (g < 0.2) break; continue; }
+      let r = rand() * ok.reduce((a, c) => a + c.w, 0), pick = ok[ok.length - 1];
+      for (const c of ok) { r -= c.w; if (r <= 0) { pick = c; break; } }
+      spots.push(pick);
+    }
+    const mean = cells.reduce((a, c) => a + c.v, 0) / Math.max(1, cells.length) || 1;
+    const got = spots.reduce((a, c) => a + c.v, 0) / Math.max(1, spots.length);
+    return { spots: spots.map((c) => [c.x, c.y]), gain: got / mean, gap: g };
+  }
+
+  // ------------------------------------------------------------- skin ------
+  // Growing one behaviour on another (Genware): a second, finer growth of felt tufts on the surfaces
+  // of an existing form, densest where a second field (usually the speech-band sound) is strongest.
+  // genes: density, length, thickness, contrast.
+  function growSkin(parts, field, sg, env, mount) {
+    const rand = rng(seedOf(sg) + 17), density = lerp(15, 160, sg[0]), len = lerp(0.03, 0.12, sg[1]), r = lerp(0.004, 0.012, sg[2]), gamma = lerp(0.5, 3, sg[3]);
+    const H = env.height, f = field || flatField, out = [], MAX = 1200;
+    const fAt = (q) => Math.pow(Math.max(0, Math.min(1, sampleField(f.data, f.nx, f.nz, q[0] / env.width + 0.5, (mount === "hanging" ? q[2] + H : q[2]) / H))), gamma);
+    const tuft = (q, nrm) => { if (out.length < MAX) out.push({ a: q, b: add(q, mul(nrm, len)), r }); };
+    const tries = (area) => { const x = area * density; return Math.floor(x) + (rand() < x - Math.floor(x) ? 1 : 0); };
+    for (const p of parts) {
+      if (p.structure) continue;
+      if (isSheet(p)) {
+        const nh = norm(cross(p.u, p.v)), area = 8 * Math.hypot(...cross(p.u, p.v));
+        for (let k = tries(area); k > 0; k--) {
+          const sgn = rand() < 0.5 ? -1 : 1, q = add(add(p.c, mul(p.u, rand() * 2 - 1)), add(mul(p.v, rand() * 2 - 1), mul(nh, (sgn * p.t) / 2)));
+          if (rand() < fAt(q)) tuft(q, mul(nh, sgn));
+        }
+        continue;
+      }
+      const d = sub(p.b, p.a), Ls = Math.hypot(...d), sphere = Ls < 1e-6, area = sphere ? 4 * Math.PI * p.r * p.r : 2 * Math.PI * p.r * Ls;
+      const ax = sphere ? [0, 0, 1] : mul(d, 1 / Ls), u = perp(ax), v = cross(ax, u);
+      for (let k = tries(area); k > 0; k--) {
+        let nrm;
+        if (sphere) { do nrm = [rand() * 2 - 1, rand() * 2 - 1, rand() * 2 - 1]; while (dot(nrm, nrm) > 1 || dot(nrm, nrm) < 1e-4); nrm = norm(nrm); }
+        else { const th = rand() * 2 * Math.PI; nrm = add(mul(u, Math.cos(th)), mul(v, Math.sin(th))); }
+        const q = add(add(p.a, mul(d, sphere ? 0 : rand())), mul(nrm, p.r));
+        if (rand() < fAt(q)) tuft(q, nrm);
+      }
+    }
+    return out;
+  }
+  const SKIN_GENES = ["density", "length", "thickness", "contrast"];
+
   const solverStep = () => (0.68 * (C0 / BANDS[BANDS.length - 1] / CELLS_PER_WAVE)) / C0;
 
   // One generation of a genetic algorithm over gene vectors in [0, 1].
@@ -776,7 +936,7 @@
     return next;
   }
 
-  const Growth = { RULES, BANDS, STRIDE, STANCE, MIN_TIP_ANGLE, stability, hull, fieldFromSound, fieldFromModes, solverStep, pack, unpack, count, isSheet, geneCount, grow, voxelize, project, slice, downsample, makeSim, absorptionLength, roomFor, evaluate, panelBaseline, nextGeneration, rng, bounds, envelope };
+  const Growth = { placementMap, sampleLayout, growSkin, SKIN_GENES, roomModes, sampleField, RULES, BANDS, STRIDE, STANCE, MIN_TIP_ANGLE, stability, hull, fieldFromSound, fieldFromModes, solverStep, pack, unpack, count, isSheet, geneCount, grow, voxelize, project, slice, downsample, makeSim, absorptionLength, roomFor, evaluate, panelBaseline, nextGeneration, rng, bounds, envelope };
   if (typeof module !== "undefined" && module.exports) module.exports = Growth;
   else root.Growth = Growth;
 })(typeof self !== "undefined" ? self : this);

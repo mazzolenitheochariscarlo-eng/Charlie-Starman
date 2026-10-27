@@ -94,3 +94,33 @@ assert.ok(mem.label && mem.field, "membrane reports its holdfast and final field
 const st = G.evaluate({ rule: "membrane", genes: Array.from({ length: G.geneCount("membrane") }, () => 0.5), mount: "standing", size: 1.2, material: { sigma: 20000, density: 60 }, budget: 6, field: fa });
 assert.ok(st.stance && Number.isFinite(st.stance.angle) && st.stance.across > 0.2, `membrane stability (${st.stance.angle.toFixed(1)}°)`);
 console.log(`genware ok: ${tiles.length} cells, ${st.mass.toFixed(2)} kg, ${st.area.map((a) => a.toFixed(2)).join("/")} m2, tips at ${st.stance.angle.toFixed(0)}°`);
+
+// Interference cut-sheet: flaps open where the field is strong; soft light felt sags, stiff felt holds.
+const csGenes = Array.from({ length: G.geneCount("cutsheet") }, () => 0.5);
+csGenes[8] = 0.2; // top hinges, so gravity matters
+const cs = (density) => G.grow("cutsheet", csGenes, { mount: "standing", size: 1.2, field: left, material: { density, sigma: 20000 } });
+const stiff = cs(250), soft = cs(40), plan = stiff.cutPlan;
+const flapsLeft = plan.cells.filter((c) => c.w > 0 && c.s < 0).length, flapsRight = plan.cells.filter((c) => c.w > 0 && c.s > 0).length;
+assert.ok(flapsLeft > flapsRight, `cut-sheet cuts where the sound is strong (${flapsLeft} vs ${flapsRight} flaps)`);
+assert.ok(soft.cutPlan.droop > stiff.cutPlan.droop, `soft felt sags more (${soft.cutPlan.droop.toFixed(2)} vs ${stiff.cutPlan.droop.toFixed(2)})`);
+assert.ok(plan.cutLength > 0 && stiff.label, "cut length and holdfast reported");
+const ce = G.evaluate({ rule: "cutsheet", genes: csGenes, mount: "standing", size: 1.2, material: { sigma: 20000, density: 120 }, budget: 6, field: fa });
+assert.ok(ce.cutPlan && ce.score > 0 && ce.stance, "cut-sheet evaluates with its cut plan");
+console.log(`cut-sheet ok: ${plan.flaps} flaps, ${plan.cutLength.toFixed(1)} m of cuts, ${ce.mass.toFixed(2)} kg, ${ce.area.map((a) => a.toFixed(2)).join("/")} m2`);
+
+// Skin: a second growth on a form, densest where its own field is strong, and counted in the evaluation.
+const host = G.grow("leaves", Array.from({ length: G.geneCount("leaves") }, () => 0.5), { mount: "standing", size: 1.2 });
+const tufts = G.growSkin(host, left, [0.8, 0.5, 0.5, 0.5], G.envelope(1.2, "standing"), "standing");
+assert.ok(tufts.length > 20, `skin grows tufts (${tufts.length})`);
+assert.ok(tufts.filter((q) => q.a[0] < 0).length > tufts.length * 0.6, "skin is densest where its field is strong");
+const skinned = G.evaluate({ rule: "leaves", genes: Array.from({ length: G.geneCount("leaves") }, () => 0.5), mount: "standing", size: 1.2, material: { sigma: 20000, density: 60 }, budget: 8, skin: { field: fa, genes: [0.8, 0.5, 0.5, 0.5] } });
+const bare = G.evaluate({ rule: "leaves", genes: Array.from({ length: G.geneCount("leaves") }, () => 0.5), mount: "standing", size: 1.2, material: { sigma: 20000, density: 60 }, budget: 8 });
+assert.ok(skinned.skinCount > 0 && skinned.mass > bare.mass, "skin adds felt");
+
+// Placement map: no spots inside the walls, layouts keep their spacing and favour the map.
+const pm = G.placementMap({ lx: 12, ly: 8, H: 4.5, need: [0.3, 0.3, 0.2, 0.1, 0.05, 0.05] });
+assert.ok(pm.data[0] === 0 && Math.max(...pm.data) === 1, "placement map normalised, walls excluded");
+const lay = G.sampleLayout(pm, 10, 3, 1.5);
+assert.ok(lay.spots.length === 10 && lay.gain > 1, `layout drawn from the map (${lay.gain.toFixed(2)}x an even spread)`);
+for (let i = 0; i < lay.spots.length; i++) for (let j = i + 1; j < lay.spots.length; j++) assert.ok(Math.hypot(lay.spots[i][0] - lay.spots[j][0], lay.spots[i][1] - lay.spots[j][1]) >= lay.gap - 1e-9, "spacing kept");
+console.log(`skin and placement ok: ${tufts.length} tufts, layout ${lay.gain.toFixed(2)}x`);

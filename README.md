@@ -50,6 +50,21 @@ one-person module mass, flat-pack transport and reuse across many events.
   three rounds the field is lowered where the membrane already absorbs (form and sound shaping each
   other). A seed library keeps genomes the designer likes and starts new growth from them, after
   Lambros Malafouris's reading of Genware as a "library of seeds" changed by what grows from it.
+- **Interference cut-sheet** (after Biothing's laser-cut ceiling at the New Museum, where wave
+  interference was cut into flat sheets that gravity bent into 3D): one flat felt sheet with
+  three-sided flap cuts drawn by the same sound fields. Flaps are larger and open further where the
+  air moves most. Each flap then sags under its own weight (felt as a cantilever, stiffness rising
+  with density), so the material finishes the design: top hinges sag in soft felt, side hinges hold.
+  Only sheet felts are used, and it exports an SVG cut file (red cut, blue/green scored hinges).
+- **Grow further** on any grown form: *a family of 6 variants* whose genes move within
+  "brackets of elasticity" around the parent (all different, one nature, like dunes in one desert),
+  compared with identical copies; and *a speech skin*, a second, finer growth of felt tufts on the
+  form's surfaces drawn by the speech-band sound (one behaviour grown on another).
+- **Where pieces help most**: a probability map of the room plan (low pitches: the room's
+  standing waves at ear height, because felt works where air moves; speech: a band 0.4-1.6 m in
+  from the walls) from which layouts A, B and C are drawn by chance and shown in the 3D room. After
+  the "probabilistic programme" of Biothing's tower project. Positions do not change the Sabine echo.
+- The **seed library** can be saved as a file after one exhibition and loaded at the next venue.
 - **Spaces**: exhibition areas as 3D models (ready-made rooms, or your own `.obj` exports).
   Set the finishes and visitor count, place grown shapes, and compare reverberation time
   with the recommended value and the drop in crowd noise.
