@@ -65,9 +65,11 @@ one-person module mass, flat-pack transport and reuse across many events.
   from the walls) from which layouts A, B and C are drawn by chance and shown in the 3D room. After
   the "probabilistic programme" of Biothing's tower project. Positions do not change the Sabine echo.
 - The **seed library** can be saved as a file after one exhibition and loaded at the next venue.
-- **Floor, wall or ceiling** for every generator, or **All 3** in one run. Wall pieces are pressed into
-  a relief no deeper than the wall envelope and tested against the wall; seeds are kept per place, and
-  in the room wall modules line the walls, ceiling modules hang under the ceiling.
+- **Wall, freestanding or ceiling** for every generator, or **All 3** in one run. A *wall* is a
+  double-sided partition that joins edge to edge with others, standing on the ground on feet or hung
+  from the ceiling on cables; *freestanding* is a single module with its own holdfast; *ceiling* pieces
+  hang overhead. Seeds are kept per place; in the room, wall modules form partitions across the room
+  with passages at the ends.
 - **The graph** (like Grasshopper or nTop): every single generator opens as a chain of nodes (seed and
   place, field, the rule's values grouped as cell / response to the field / holdfast, material,
   evolve). Drag a value and the 3D preview regrows; lock it, or set the range evolution may explore;
@@ -82,11 +84,9 @@ one-person module mass, flat-pack transport and reuse across many events.
   slab, as a heat-formed felt shell with holes) and agent fibres (a flocking swarm whose trails become
   a mat of soft cords with hooked tufts). Printed struts and shells barely absorb (their gaps are far
   too big to rub the air), so lattices carry felt; every form also exports a 1:1 front drawing (SVG).
-- **Structures** (third tab): every surface texture and growth rule measured the same way (same
-  size, felt, place and budget, a neutral genome, an even field) for the floor, a wall or the ceiling.
-  Ranked per piece, per kg of felt or against a flat panel, plotted against felt weight, listed by
-  pitch, and explained by mechanism (friction in pores, graded porosity, depth and cavities, air gaps,
-  resonators, felt in free air, open sheets and edges, felt in a printed frame, shells, fibre mats).
+- **Structures** (third tab): a gallery of every generator grown three ways (as a wall on the ground or
+  hung, as a freestanding module, as a ceiling piece), with middle values or new random generations.
+  Clicking a picture opens that exact generation in the Studio's graph.
 - **Spaces**: exhibition areas as 3D models (ready-made rooms, or your own `.obj` exports).
   Set the finishes and visitor count, place grown shapes, and compare reverberation time
   with the recommended value and the drop in crowd noise.

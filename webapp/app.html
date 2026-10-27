@@ -150,6 +150,22 @@ tr.current td { background: var(--panel-2); }
 .rowc { display: flex; gap: 6px; align-items: center; }
 @media (max-width: 700px) { .graph { grid-auto-flow: row; grid-auto-columns: auto; } .node + .node::before { left: 18px; top: -27px; width: 2px; height: 26px; } .node + .node::after { left: 15px; top: -5px; } }
 .primer { margin: 4px 0 6px; }
+.segd.small button { padding: 2px 8px; font-size: 11px; }
+#opt-mount { display: flex; gap: 6px; align-items: center; }
+.node .segd { flex-wrap: wrap; }
+.gal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 14px; }
+.gal-card { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel, var(--app)); min-width: 0; }
+.gal-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.gal-head .muted { font-size: 12px; }
+.gal-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.gal-row.one { grid-template-columns: minmax(0, 1fr); }
+.gal-th { display: grid; gap: 2px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: #2b2e34; cursor: pointer; overflow: hidden; color: var(--muted); font: inherit; }
+.gal-th:hover { border-color: var(--accent); }
+.gal-th img { width: 100%; aspect-ratio: 320 / 260; display: block; object-fit: cover; }
+.gal-th img.waiting { background: linear-gradient(90deg, #15161a, #23252b, #15161a); background-size: 200% 100%; animation: shimmer 1.2s infinite linear; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+.gal-th small { padding: 2px 0 4px; font-size: 11px; }
+.th-none { aspect-ratio: 320 / 260; display: grid; place-items: center; font-size: 11px; color: var(--muted); }
 .mech-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
 .mech { display: grid; gap: 4px; padding: 10px; border: 1px solid rgba(127, 127, 127, 0.35); border-radius: 6px; background: rgba(127, 127, 127, 0.08); color: inherit; font-size: 13px; }
 .minib { display: inline-flex; gap: 2px; align-items: end; height: 22px; }
@@ -327,7 +343,7 @@ const state = {
   results: null, preview: {}, seed: 1, growing: false, progress: 0, ranking: null,
   flatThick: 50, matView: "chart", view: "3d",
   spaces: [], spaceId: null, yUp: false, showAbs: true, nextId: 1,
-  matPick: "auto", famEl: 0.12, allMounts: false, fMount: "standing", fRule: "all", fSize: 1.2, fBudget: 4, forms: [], formSel: null, fGrowing: false, fProgress: 0, fNext: 1, fSeed: 1, fLive: null, fBand: 500,
+  matPick: "auto", famEl: 0.12, allMounts: false, wallHung: false, fMount: "standing", fRule: "all", fSize: 1.2, fBudget: 4, forms: [], formSel: null, fGrowing: false, fProgress: 0, fNext: 1, fSeed: 1, fLive: null, fBand: 500,
 };
 // Soft materials evolution may use: all ticked ones, or the one picked in the options bar.
 const allowedSoft = () => (state.matPick === "auto" ? [...state.porous] : [state.matPick]);
@@ -1092,10 +1108,10 @@ const View3D = (() => {
         const f = formOf(pl.family);
         if (!f || pl.area <= 0) continue;
         const n = Math.max(1, Math.min(Math.round(pl.area), Math.floor(60000 / Math.max(1, G.count(f.prims))))), step = f.size * 1.4;
-        if (f.mount === "wall") { const sp2 = wallSpots(sp, f.size, n, wi); wi += sp2.length; formInstances(f, sp2, v.root); continue; }
+        if (G.isWall(f.mount)) { const sp2 = partitionSpots(sp, f, n, wi); wi += sp2.length; formInstances(f, sp2, v.root); continue; }
         const cols = Math.max(1, Math.floor((W - step) / step) + 1), spots = [];
         for (let k = 0; k < n; k++) {
-          const zs = f.mount === "hanging" ? max[2] : min[2];
+          const zs = G.hung(f.mount) ? max[2] : min[2];
           if (lay && li < lay.spots.length) { const [sx, sy] = lay.spots[li++]; spots.push([min[0] + sx, min[1] + sy, zs]); continue; }
           const i = k % cols, j = Math.floor(k / cols);
           const x = min[0] + (W - (cols - 1) * step) / 2 + i * step, y = min[1] + step / 2 + 0.5 + j * step;
@@ -1415,8 +1431,16 @@ self.onmessage = (e) => {
 })();
 
 // Mounts: every generator grows for a wall, the ceiling or the floor (or all three in one run).
-const MOUNTS = ["wall", "hanging", "standing"], MOUNT_NAME = { standing: "Freestanding", wall: "On a wall", hanging: "From the ceiling" };
-const mountsToGrow = () => (state.allMounts ? MOUNTS.slice() : [state.fMount]);
+// Wall: a double-sided partition, on the ground or hung from the ceiling. Freestanding: a single module.
+// Ceiling: a piece hanging overhead.
+const MOUNTS = ["wall", "wallhung", "standing", "hanging"], MOUNT_NAME = { standing: "Freestanding", wall: "Wall on the ground", wallhung: "Wall hung from the ceiling", hanging: "Ceiling" };
+const wallMount = () => (state.wallHung ? "wallhung" : "wall");
+const mountsToGrow = () => (state.allMounts ? [wallMount(), "standing", "hanging"] : [state.fMount]);
+function mountSeg(attr) {
+  const wall = G.isWall(state.fMount) && !state.allMounts;
+  return `<div class="segd" role="group" aria-label="Where it goes">${[["wall", "Wall"], ["standing", "Freestanding"], ["hanging", "Ceiling"]].map(([k, l]) => `<button ${attr}="${k}" aria-pressed="${!state.allMounts && (k === "wall" ? G.isWall(state.fMount) : state.fMount === k)}" title="${k === "wall" ? "A double-sided partition, on the ground or hung" : MOUNT_NAME[k]}">${l}</button>`).join("")}${attr === "data-mount" ? `<button ${attr}="all" aria-pressed="${state.allMounts}" title="Grow a wall, a freestanding module and a ceiling piece in one run">All 3</button>` : ""}</div>
+    ${wall || (state.allMounts && attr === "data-mount") ? `<div class="segd small" role="group" aria-label="How the wall stands">${[["ground", "On the ground"], ["hung", "Hung"]].map(([k, l]) => `<button ${attr}="${k}" aria-pressed="${(k === "hung") === !!state.wallHung}">${l}</button>`).join("")}</div>` : ""}`;
+}
 const isLab = (k) => !!(G.RULES[k] && G.RULES[k].lab), usesField = (k) => isSound(k) || isLab(k);
 const seedKey = (rule, mount) => rule + "@" + mount;
 const printKey = (rule) => (G.RULES[rule] && G.RULES[rule].group === "lattice" ? state.lab.print : structureKey());
@@ -1444,7 +1468,7 @@ async function growForms() {
   try {
     for (const mount of mounts) for (const rule of rules) {
       if (isSurf(rule)) {
-        if (rule === "cloud" && mount !== "hanging") { if (!state.allMounts) addMsg("note", "The hanging cloud only hangs: switch to Ceiling to grow it."); steps += GENS + 1; continue; }
+        if (rule === "cloud" && mount !== "hanging") { if (!state.allMounts) addMsg("note", "The hanging cloud is a ceiling piece: switch to Ceiling to grow it."); steps += GENS + 1; continue; }
         const base = steps;
         const piece = await growSurface(rule, structureKey(), mount, (live, prog) => {
           state.fLive = live; state.fProgress = (base + prog * (GENS + 1)) / total;
@@ -1494,7 +1518,7 @@ async function growForms() {
   if (made.length) {
     const top = made.slice().sort((a, b) => b.fitness - a.fitness)[0];
     state.formSel = top.id;
-    addMsg("note", mounts.length > 1 ? `Grown for the wall, the ceiling and the floor: ${made.map((f) => `${f.name} (${MOUNT_NAME[f.mount].toLowerCase()}) ${fix(f.score, 2)} m²`).join(", ")}.`
+    addMsg("note", mounts.length > 1 ? `Grown as a wall, a freestanding module and a ceiling piece: ${made.map((f) => `${f.name} (${MOUNT_NAME[f.mount].toLowerCase()}) ${fix(f.score, 2)} m²`).join(", ")}.`
       : `Grown. ${made.length > 1 ? `Best rule: ${top.name}` : top.name}: ${fix(top.score, 2)} m² of absorption per piece. Watch the sound under the 3D view.`);
   }
   renderAll();
@@ -1532,14 +1556,15 @@ function bindRoomSelect() {
   $("#import-file").onchange = (e) => importOBJ(e.target.files[0]);
 }
 function setMount(k) {
-  if (k === "all") state.allMounts = !state.allMounts; else { state.allMounts = false; state.fMount = k; }
+  if (k === "all") state.allMounts = !state.allMounts;
+  else if (k === "ground" || k === "hung") { state.wallHung = k === "hung"; if (!state.allMounts) state.fMount = wallMount(); }
+  else { state.allMounts = false; state.fMount = k === "wall" ? wallMount() : k; }
   state.gw.field = null;
   renderOptbar(); renderCanvas(); renderDock(); renderStatus();
 }
 function renderFormsBar(ob) {
   ob.classList.add("studio");
-  ob.innerHTML = `${roomSelect()}<span class="divider"></span>${targetSelect()}<span class="divider"></span><div class="opt" id="opt-mount"><div class="segd" role="group" aria-label="Where the piece goes">
-      ${[["standing", "Floor"], ["wall", "Wall"], ["hanging", "Ceiling"]].map(([k, l]) => `<button data-mount="${k}" aria-pressed="${!state.allMounts && state.fMount === k}" title="${MOUNT_NAME[k]}">${l}</button>`).join("")}<button data-mount="all" aria-pressed="${state.allMounts}" title="Grow a seed for the wall, the ceiling and the floor in one run">All 3</button></div></div>
+  ob.innerHTML = `${roomSelect()}<span class="divider"></span>${targetSelect()}<span class="divider"></span><div class="opt" id="opt-mount">${mountSeg("data-mount")}</div>
     <span class="divider"></span>
     ${materialPicker("f-mat-pick")}
     <span class="divider"></span>
@@ -1656,7 +1681,7 @@ function formsLayersPanel() {
   const nSeeds = Object.values(state.seeds).reduce((a, l) => a + l.length, 0);
   const byMount = MOUNTS.map((m) => [m, Object.entries(state.seeds).filter(([k]) => k.endsWith("@" + m)).reduce((a, [, l]) => a + l.length, 0)]).filter(([, n]) => n);
   return `<details class="panel" ${gmode() === "forms" || state.forms.length ? "open" : ""} id="panel-forms"><summary>Grown structures</summary><div class="panel-body">
-    <p class="hint">Seed library: ${nSeeds ? `${nSeeds} seed${nSeeds === 1 ? "" : "s"} (${byMount.map(([m, n]) => `${MOUNT_NAME[m].toLowerCase()} ${n}`).join(", ")}). New growth for that place starts from them, so what grows feeds back into what grows next.` : "empty. Add forms you like (Properties): wall, ceiling and floor seeds are kept apart."}</p>
+    <p class="hint">Seed library: ${nSeeds ? `${nSeeds} seed${nSeeds === 1 ? "" : "s"} (${byMount.map(([m, n]) => `${MOUNT_NAME[m].toLowerCase()} ${n}`).join(", ")}). New growth for that place starts from them, so what grows feeds back into what grows next.` : "empty. Add forms you like (Properties): wall, freestanding and ceiling seeds are kept apart."}</p>
     <div class="chips">${nSeeds ? '<button class="chip" id="seeds-clear">Clear</button>' : ""}${nSeeds && downloads ? '<button class="chip" id="seeds-save">Save seeds for the next venue</button>' : ""}<button class="chip" id="seeds-load">Load seeds…</button><input type="file" id="seeds-file" accept=".json,application/json" hidden></div>
     ${list.map((f) => `<button class="layer" data-form-pick="${f.id}" aria-pressed="${state.formSel === f.id}">
       <span class="thumb rule-thumb">${icon(f.rule)}</span><span><strong>${esc(f.name)}</strong><small>${MOUNT_NAME[f.mount].toLowerCase()} · ${fix(f.mass, 1)} kg · ${esc(E.FELTS[f.material].name)}</small></span>
@@ -1826,16 +1851,11 @@ const FormView = (() => {
   function build(f) {
     v.clear();
     formInstances(f, [[0, 0, 0]], v.root);
-    const S = f.size, H = f.mount === "hanging" ? S : G.envelope(S, f.mount).height, grey = new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1 });
-    if (f.mount === "wall") {
-      const wall = new T3.Mesh(new T3.BoxGeometry(S * 1.6, 0.02, H * 1.4), grey);
-      wall.position.set(0, -0.012, H / 2); v.root.add(wall);
-    } else {
-      const slab = new T3.Mesh(new T3.BoxGeometry(S * 1.6, S * 1.6, 0.02), f.mount === "hanging" ? new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1, transparent: true, opacity: 0.55 }) : grey);
-      slab.position.set(0, 0, f.mount === "hanging" ? 0.01 : -0.01);
-      v.root.add(slab);
-    }
-    if (f.mount === "standing") {
+    const S = f.size, H = f.mount === "hanging" ? S : G.envelope(S, f.mount).height, grey = new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1 }), up = G.hung(f.mount);
+    const slab = new T3.Mesh(new T3.BoxGeometry(S * 1.6, S * 1.6, 0.02), up ? new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1, transparent: true, opacity: 0.55 }) : grey);
+    slab.position.set(0, 0, up ? 0.01 : -0.01);
+    v.root.add(slab);
+    if (G.onGround(f.mount)) {
       const body = new T3.MeshStandardMaterial({ color: 0x8d9198, roughness: 1 }), x = S / 2 + 0.45;
       const part = (geo, z) => { const m = new T3.Mesh(geo, body); m.rotation.x = Math.PI / 2; m.position.set(x, 0, z); v.root.add(m); };
       part(new T3.CylinderGeometry(0.11, 0.09, 0.85, 12), 0.43);
@@ -1846,8 +1866,8 @@ const FormView = (() => {
     const frame = [f.mount, S, H].join();
     if (frame === framed) return;
     framed = frame;
-    const midZ = f.mount === "hanging" ? -H / 2 : H / 2;
-    Object.assign(v.orbit, { target: [f.mount === "standing" ? 0.25 : 0, f.mount === "wall" ? 0.1 : 0, midZ], dist: Math.max(S, H) * 2.4, theta: f.mount === "wall" ? 1.2 : -0.9, phi: f.mount === "hanging" ? 1.85 : 1.2 });
+    const midZ = up ? -H / 2 : H / 2;
+    Object.assign(v.orbit, { target: [G.onGround(f.mount) ? 0.25 : 0, 0, midZ], dist: Math.max(S, H) * 2.4, theta: -0.9, phi: f.mount === "hanging" ? 1.85 : 1.2 });
   }
   return {
     show(slot, f) {
@@ -1985,19 +2005,17 @@ async function computeField(mount = state.fMount) {
   try {
     const room = gwRoom(), env = G.envelope(state.fSize, mount);
     const L = Math.min(16, Math.max(3, room.L)), H = Math.min(6, Math.max(2.4, room.H)), W = Math.max(2, room.W);
-    const width = state.fSize, height = mount === "hanging" ? state.fSize : env.height, zWall = Math.max(0, Math.min(1.0, H - height));
-    const x0 = 0.62 * L, zBase = mount === "hanging" ? Math.max(0, H - height) : mount === "wall" ? zWall : 0;
+    const width = state.fSize, height = mount === "hanging" ? state.fSize : env.height;
+    const x0 = 0.62 * L, zBase = G.hung(mount) ? Math.max(0, H - height - (mount === "wallhung" ? 0.25 : 0)) : 0;
     let field;
     if (state.gw.source === "room") {
-      field = mount === "wall" ? G.fieldFromModes({ L, W, H, x0, y0: 0.03, width, height, zBase })
-        : mount === "hanging" ? G.fieldFromModes({ L, W, H, x0, y0: 0.37 * W, width, height, ceilingZ: H - 0.3 })
+      field = mount === "hanging" ? G.fieldFromModes({ L, W, H, x0, y0: 0.37 * W, width, height, ceilingZ: H - 0.3 })
         : G.fieldFromModes({ L, W, H, x0, y0: 0.37 * W, width, height, zBase });
     } else {
       const sec = { w: L, h: H, cx: x0 }, src = [Math.max(0.5, x0 - 2), Math.min(H - 0.3, 1.5)], file = state.gw.source === "file";
       const run = (o) => G.fieldFromSound({ room: sec, ...(file ? { signal: state.gw.file.signal } : { weights: formBandWeights() }), src, ...o });
-      // The 2D section sees a wall only by height and a ceiling only along its length, so the field is spread across.
-      field = mount === "wall" ? { ...spread(run({ x0: 0.2, width: 0.3, height, zBase }), true) }
-        : mount === "hanging" ? { ...spread(run({ x0, width, height: 0.3, zBase: H - 0.35 }), false) }
+      // The 2D section sees a ceiling only along its length, so that field is spread across.
+      field = mount === "hanging" ? { ...spread(run({ x0, width, height: 0.3, zBase: H - 0.35 }), false) }
         : run({ x0, width, height, zBase });
       if (file) field.rhythm = { bpm: state.gw.file.bpm, strength: state.gw.file.strength };
     }
@@ -2105,7 +2123,7 @@ function drawField(cv, field, parts, width, height, mount) {
   ctx.strokeStyle = "rgba(255,255,255,0.75)"; ctx.lineWidth = 1;
   for (const p of parts) {
     if (!G.isSheet(p) || p.structure) continue;
-    const z = p.c[2] + (mount === "hanging" ? height : 0), hu = Math.hypot(p.u[0], p.u[1]), hv = Math.hypot(...p.v);
+    const z = p.c[2] + (G.hung(mount) ? height : 0), hu = Math.hypot(p.u[0], p.u[1]), hv = Math.hypot(...p.v);
     const px = (p.c[0] / width + 0.5) * W, py = (1 - z / height) * Hp, sx = (hu / width) * W, sy = (hv / height) * Hp;
     ctx.strokeRect(px - sx, py - sy, 2 * sx, 2 * sy);
   }
@@ -2237,7 +2255,7 @@ function drawCutCard(f) {
 const SPEECH_W = [0.2, 0.4, 0.4];
 function speechField(f) {
   const room = gwRoom(), env = G.envelope(f.size, f.mount), L = Math.min(16, Math.max(3, room.L)), H = Math.min(6, Math.max(2.4, room.H));
-  const x0 = 0.62 * L, zBase = f.mount === "hanging" ? Math.max(0, H - env.height) : 0;
+  const x0 = 0.62 * L, zBase = G.hung(f.mount) ? Math.max(0, H - env.height) : 0;
   const fl = G.fieldFromSound({ room: { w: L, h: H, cx: x0 }, weights: SPEECH_W, x0, width: f.size, height: env.height, src: [Math.max(0.5, x0 - 2), Math.min(H - 0.3, 1.5)], zBase });
   return { data: fl.data, nx: fl.nx, nz: fl.nz };
 }
@@ -2362,20 +2380,19 @@ function bindFamilyCard(f) {
 
 // The room as a field of probabilities (Biothing's tower: uses find probable places in a field,
 // instead of a fixed bubble diagram). Layouts are drawn from the map by chance; each is a proposal.
-// Wall modules in rows along the four walls (from 1 m up), turned so they grow into the room.
-function wallSpots(sp, size, n, skip = 0) {
-  const { min, max } = sp.info, W = max[0] - min[0], D = max[1] - min[1], H = max[2] - min[2], pitch = size + 0.3;
-  const walls = [{ len: W, at: (t) => [min[0] + t, min[1]], rot: 0 }, { len: D, at: (t) => [max[0], min[1] + t], rot: Math.PI / 2 },
-    { len: W, at: (t) => [max[0] - t, max[1]], rot: Math.PI }, { len: D, at: (t) => [min[0], max[1] - t], rot: -Math.PI / 2 }];
-  const all = [];
-  for (let z = 1.0; z + size <= H - 0.15 && all.length < skip + n; z += size + 0.25) for (const w of walls) {
-    const slots = Math.max(0, Math.floor((w.len - 0.6) / pitch)), start = (w.len - slots * pitch) / 2 + pitch / 2;
-    for (let k = 0; k < slots; k++) { const [x, y] = w.at(start + k * pitch); all.push([x, y, min[2] + z, w.rot]); }
+// Wall modules join edge to edge into partitions running across the room, a metre clear of the room's
+// walls at each end so visitors can pass; on the floor, or hung from the ceiling.
+function partitionSpots(sp, f, n, skip = 0) {
+  const { min, max } = sp.info, W = max[0] - min[0], D = max[1] - min[1], pitch = f.size + 0.02, perRun = Math.max(1, Math.floor((W - 2) / pitch));
+  const runs = Math.max(1, Math.ceil((skip + n) / perRun)), all = [];
+  for (let k = 0; k < runs; k++) {
+    const y = min[1] + (D * (k + 1)) / (runs + 1), start = min[0] + (W - perRun * pitch) / 2 + pitch / 2;
+    for (let i = 0; i < perRun; i++) all.push([start + i * pitch, y, G.hung(f.mount) ? max[2] : min[2], 0]);
   }
   return all.slice(skip, skip + n);
 }
 function roomBox(sp) { const { min, max } = sp.info; return { min, lx: max[0] - min[0], ly: max[1] - min[1], H: max[2] - min[2] }; }
-const formPlacements = (sp) => sp.placements.filter((pl) => isForm(pl.family) && formOf(pl.family) && pl.area > 0 && formOf(pl.family).mount !== "wall");
+const formPlacements = (sp) => sp.placements.filter((pl) => isForm(pl.family) && formOf(pl.family) && pl.area > 0 && !G.isWall(formOf(pl.family).mount));
 function roomMap(sp) {
   const { lx, ly, H } = roomBox(sp), need = R.OCTAVES.map((f) => E.TARGETS.room[f] || 0);
   const piece = Math.max(state.fSize, ...formPlacements(sp).map((pl) => formOf(pl.family).size));
@@ -2469,7 +2486,7 @@ function labField(rule) {
 function growOrder(rule, prims, mount) {
   const idx = prims.map((_, i) => i), R = G.RULES[rule];
   if (R.group !== "lattice" && rule !== "bioform") return idx;
-  const key = (p) => { const c = G.isTri(p) ? p.tri[0] : G.isSheet(p) ? p.c : p.a; return mount === "hanging" ? -c[2] : mount === "wall" ? c[1] * 4 + c[2] * 0.01 : c[2]; };
+  const key = (p) => { const c = G.isTri(p) ? p.tri[0] : G.isSheet(p) ? p.c : p.a; return G.hung(mount) ? -c[2] : c[2]; };
   return idx.sort((a, b) => key(prims[a]) - key(prims[b]));
 }
 function labBuild(rule) {
@@ -2534,7 +2551,7 @@ function playGrowth() {
 function labView(rule) {
   const c = $("#struct-zone") || $("#canvas"), R = G.RULES[rule], genes = labGenes(rule), locks = labLocks(rule), ranges = labRanges(rule), schema = paramSchema(rule);
   FormWave.stop();
-  const standing = state.fMount === "standing" || state.allMounts, nodes = [];
+  const standing = G.onGround(state.fMount) || state.allMounts, nodes = [];
   for (const p of schema) { if (p.node === HOLD_NODE && !standing) continue; let nd = nodes.find((x) => x.name === p.node); if (!nd) nodes.push((nd = { name: p.node, ps: [] })); nd.ps.push(p); }
   const prm = (p) => {
     const g = genes[p.i], lk = locks[p.i], [lo, hi] = ranges[p.i];
@@ -2550,7 +2567,7 @@ function labView(rule) {
     <p class="hint">Imitates ${esc(R.imitates)}. ${esc(R.idea)}</p>
     <div class="graph">
       <section class="node"><h4>Seed and place</h4>
-        <div class="segd" role="group" aria-label="Where it goes">${[["standing", "Floor"], ["wall", "Wall"], ["hanging", "Ceiling"]].map(([k, l]) => `<button data-lab-mount="${k}" aria-pressed="${state.fMount === k}">${l}</button>`).join("")}</div>
+        ${mountSeg("data-lab-mount")}
         <div class="prm"><div class="prm-head"><span>Size</span><output id="lab-size-out" class="mono">${fix(state.fSize, 1)} m</output></div><input type="range" id="lab-size" min="0.4" max="2" step="0.1" value="${state.fSize}" aria-label="Size"></div>
         <div class="prm"><div class="prm-head"><span>Random seed</span></div><input type="number" id="lab-seed" min="1" max="99999" step="1" value="${ev.seed}" aria-label="Random seed"></div>
         <label class="opt"><input type="checkbox" id="lab-fixed" ${ev.fixed ? "checked" : ""}> Same seed every run (repeatable)</label></section>
@@ -2677,158 +2694,139 @@ const GROUP_OF = (k) => (isSurf(k) ? "Surface textures" : { hybrid: "Sheet hybri
 const GROUP_COLORS = { "Surface textures": "#4a90e2", "Natural growth": "#5bb67c", "Sheet hybrids": "#3fb8b0", "Sound-grown": "#e6a23c", Patterns: "#b07ce0", Lattices: "#e46b5f", "My structures": "#d4d06a" };
 const ATLAS_FILTERS = [["all", "Everything"], ["allsurf", "Surface textures"], ["tree", "Natural growth"], ["allsheets", "Sheet hybrids"], ["membrane", "Sound-grown"], ["voronoi", "Patterns"], ["strutlattice", "Lattices"], ["eye", "My structures"]];
 const FILTER_GROUP = { allsurf: "Surface textures", tree: "Natural growth", allsheets: "Sheet hybrids", membrane: "Sound-grown", voronoi: "Patterns", strutlattice: "Lattices", eye: "My structures" };
-state.atlas = { mount: "wall", material: "pet_felt_medium", filter: "all", sel: null, rows: null, key: "", busy: false, progress: 0, rankBy: "piece" };
-const RANK_BY = { piece: ["Per piece", (r) => r.score, (v) => fix(v, 2) + " m²"], kg: ["Per kg of felt", (r) => (r.mass > 1e-3 ? r.score / r.mass : 0), (v) => fix(v, 2) + " m²/kg"], panel: ["Versus a panel", (r) => (r.bs > 1e-4 ? r.score / r.bs : 0), (v) => fix(v, 1) + "×"] };
-const atlasKey = () => JSON.stringify([state.atlas.mount, state.atlas.material, state.fSize, state.fBudget, formBandWeights().map((x) => x.toFixed(3))]);
-const wScore = (area) => area.reduce((a, x, i) => a + x * formBandWeights()[i], 0);
-function bestFor(area) {
-  const top = Math.max(...area, 1e-9);
-  if (area[0] >= 0.4 * top) return "low pitches too";
-  if (area[1] >= 0.7 * top) return "voices";
-  return "higher pitches";
+state.atlas = { filter: "all", mode: "middle", seed: 1, felt: "pet_felt_medium", cache: {}, run: 0, done: 0, total: 0 };
+const galleryMounts = () => [[wallMount(), state.wallHung ? "Wall, hung" : "Wall on the ground"], ["standing", "Freestanding"], ["hanging", "Ceiling"]];
+const galleryKeys = () => {
+  const g = FILTER_GROUP[state.atlas.filter], all = [...E.FAMILIES.map((f) => f.key), ...RULE_KEYS];
+  return all.filter((k) => (state.atlas.filter === "eye" ? false : !g || GROUP_OF(k) === g));
+};
+const hashKey = (k) => [...k].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+// The genome shown for a generator: every value in the middle, or a random generation from the seed.
+function galleryGenes(rule, n) {
+  if (state.atlas.mode === "middle") {
+    const g = Array.from({ length: n }, () => 0.5);
+    if (rule === "cellular") g[7] = 0.1; // felt blocks
+    if (rule === "swarm") g[11] = 0.1; // soft cords
+    return g;
+  }
+  const rnd = G.rng(state.atlas.seed * 7919 + hashKey(rule));
+  return Array.from({ length: n }, () => rnd());
 }
-async function measureAtlas() {
-  const a = state.atlas;
-  if (a.busy) return;
-  a.busy = true; a.progress = 0; a.sel = null;
-  renderOptbar(); renderCanvas();
-  const m = E.FELTS[a.material], material = { sigma: m.sigma, density: m.density }, weights = formBandWeights(), rows = [];
-  try {
-    for (const fam of E.FAMILIES) {
-      if (fam.key === "cloud" && a.mount !== "hanging") continue;
-      const b = { ...surfBrief(fam.key, state.fSize, a.mount), porous: [a.material] }, r = E.assess(fam, E.decode(fam, fam.genes.map(() => 0.5), b), b);
-      const pc = surfPiece(r, structureKey(), state.fSize, a.mount);
-      rows.push({ key: fam.key, name: fam.name, group: GROUP_OF(fam.key), area: pc.area, mass: pc.mass, print: 0, base: surfBaseline(pc), alpha: r.alpha, form: { ...pc, name: fam.name, id: "atlas-" + fam.key } });
+const galleryField = () => { const f = G.patternField({ kind: "waves", f1: 3, f2: 5, angle: 30 }); return { data: f.data, nx: f.nx, nz: f.nz }; };
+// One generation of a generator for one place, as a form the 3D helpers can draw (null if it cannot go there).
+function galleryForm(key, mount) {
+  const felt = state.atlas.felt, m = E.FELTS[felt];
+  if (isSurf(key)) {
+    if (key === "cloud" && mount !== "hanging") return null;
+    const fam = E.FAMILY[key], b = { ...surfBrief(key, 1.2, mount), porous: [felt] }, r = E.assess(fam, E.decode(fam, galleryGenes(key, fam.genes.length), b), b);
+    return surfPiece(r, structureKey(), 1.2, mount);
+  }
+  const genes = galleryGenes(key, G.geneCount(key));
+  const parts = G.grow(key, genes, { mount, size: 1.2, field: usesField(key) ? galleryField() : null, material: { sigma: m.sigma, density: m.density } });
+  return { rule: key, genes, mount, size: 1.2, parts, material: felt, structureMat: printKey(key) };
+}
+// A single off-screen renderer turns each generation into a still picture.
+const Thumbs = (() => {
+  let r = null, scene, cam, root;
+  function init() {
+    r = new T3.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    r.setPixelRatio(1); r.setSize(320, 260, false); r.setClearColor(0x2b2e34);
+    scene = new T3.Scene(); cam = new T3.PerspectiveCamera(36, 320 / 260, 0.01, 100); cam.up.set(0, 0, 1);
+    scene.add(new T3.HemisphereLight(0xffffff, 0x60606a, 1.05));
+    const sun = new T3.DirectionalLight(0xffffff, 0.9); sun.position.set(2, -3, 5); scene.add(sun);
+    const fill = new T3.DirectionalLight(0xdde6ff, 0.45); fill.position.set(-3, 2, -1); scene.add(fill);
+    root = new T3.Group(); scene.add(root);
+  }
+  const kill = (o) => { o.children.slice().forEach(kill); if (o.geometry) o.geometry.dispose(); if (o.material) [].concat(o.material).forEach((mm) => mm.dispose()); };
+  return {
+    render(f) {
+      if (!T3) return "";
+      if (!r) init();
+      root.children.slice().forEach((ch) => { kill(ch); root.remove(ch); });
+      formInstances(f, [[0, 0, 0]], root);
+      const parts = f.parts || primsOf(f.prims), b = G.bounds(parts), c = [0, 1, 2].map((i) => (b.min[i] + b.max[i]) / 2), R = Math.max(0.3, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2);
+      const grey = new T3.MeshStandardMaterial({ color: 0x6a6e76, roughness: 1 });
+      const s2 = new T3.Mesh(new T3.BoxGeometry(R * 3, R * 3, 0.02), grey); s2.position.set(c[0], c[1], G.hung(f.mount) ? 0.012 : -0.012); root.add(s2);
+      const [th, ph] = f.mount === "hanging" ? [-0.9, 1.95] : f.mount === "wallhung" ? [-0.9, 1.7] : [-0.9, 1.22], d = R * 2.9;
+      cam.position.set(c[0] + d * Math.sin(ph) * Math.cos(th), c[1] + d * Math.sin(ph) * Math.sin(th), c[2] + d * Math.cos(ph));
+      cam.lookAt(c[0], c[1], c[2]);
+      r.render(scene, cam);
+      return r.domElement.toDataURL("image/jpeg", 0.85);
+    },
+  };
+})();
+async function fillGallery() {
+  const a = state.atlas, run = ++a.run, jobs = [];
+  for (const k of galleryKeys()) for (const [m] of galleryMounts()) jobs.push([k, m]);
+  a.total = jobs.length; a.done = jobs.filter(([k, m]) => a.cache[galKey(k, m)] !== undefined).length;
+  for (const [k, m] of jobs) {
+    const key = galKey(k, m);
+    if (a.cache[key] === undefined) {
+      await new Promise((res) => setTimeout(res, 0));
+      if (run !== a.run || state.ws !== "atlas") return;
+      let url = null;
+      try { const f = galleryForm(k, m); url = f ? Thumbs.render(f) : null; } catch (err) { url = null; }
+      a.cache[key] = url; a.done++;
+      const img = document.getElementById("th-" + k + "-" + m);
+      if (img) { if (url) { img.src = url; img.classList.remove("waiting"); } else img.replaceWith(Object.assign(document.createElement("div"), { className: "th-none", textContent: "only hangs" })); }
+      if ($("#atlas-progress")) $("#atlas-progress").style.width = (a.done / a.total) * 100 + "%";
     }
-    const keys = RULE_KEYS;
-    let done = 0;
-    await Promise.all(keys.map(async (rule) => {
-      const genes = Array.from({ length: G.geneCount(rule) }, () => 0.5);
-      if (rule === "cellular") genes[7] = 0.1; // felt blocks
-      if (rule === "swarm") genes[11] = 0.1; // soft cords
-      const sKey = printKey(rule);
-      const r = await Pool.run("evaluate", { rule, genes, mount: a.mount, size: state.fSize, material, budget: state.fBudget, weights, structureDensity: E.RIGIDS[sKey].density, field: null });
-      const b = r.mass > 1e-3 ? await Pool.run("baseline", { material, mass: r.mass }) : { area: [0, 0, 0] };
-      rows.push({ key: rule, name: G.RULES[rule].name, group: GROUP_OF(rule), area: r.area, mass: r.mass, print: r.printMass || 0, base: b.area, stance: r.stance,
-        form: { ...r, material: a.material, structureMat: sKey, name: G.RULES[rule].name, id: "atlas-" + rule } });
-      a.progress = ++done / keys.length;
-      if ($("#atlas-progress")) $("#atlas-progress").style.width = a.progress * 100 + "%";
-    }));
-    a.rows = rows; a.key = atlasKey();
-  } catch (err) {
-    addMsg("note", "The measurement stopped: " + err.message);
-  } finally {
-    a.busy = false;
   }
-  renderAll();
+  renderStatus();
 }
-function atlasRows() {
-  const a = state.atlas;
-  if (!a.rows) return [];
-  const mine = state.forms.filter((f) => f.mount === a.mount).map((f) => ({ key: "form:" + f.id, name: f.name, group: "My structures", area: f.area, mass: f.mass, print: f.printMass || 0, base: f.baseline, rule: f.rule, form: f }));
-  const all = [...a.rows, ...mine].map((r) => ({ ...r, score: wScore(r.area), bs: r.base ? wScore(r.base) : 0 }));
-  const g = FILTER_GROUP[a.filter];
-  const by = RANK_BY[a.rankBy][1];
-  return all.filter((r) => !g || r.group === g).sort((p, q) => by(q) - by(p));
-}
-// Ranking bars: absorption per piece for the target, with a tick for a flat panel of the same felt and kg.
-function rankChart(rows) {
-  const [, by, fmt] = RANK_BY[state.atlas.rankBy], piece = state.atlas.rankBy === "piece";
-  const w = 680, rh = 22, L = 170, Rr = 90, h = rows.length * rh + 30, max = Math.max(piece ? 0.05 : 0.01, ...rows.map((r) => Math.max(by(r), piece ? r.bs : state.atlas.rankBy === "panel" ? 1 : 0))) * 1.05, X = (v) => L + (v / max) * (w - L - Rr);
-  let s = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Ranking of structures by absorption">`;
-  const stp = max > 4 ? 1 : max > 2 ? 0.5 : max > 0.6 ? 0.25 : 0.05;
-  for (let v = 0; v <= max; v += stp) s += `<line x1="${X(v)}" x2="${X(v)}" y1="4" y2="${h - 22}" stroke="var(--line)"/><text x="${X(v)}" y="${h - 8}" text-anchor="middle" font-size="10" fill="var(--muted)" font-family="var(--mono)">${v.toFixed(2)}</text>`;
-  if (state.atlas.rankBy === "panel") s += `<line x1="${X(1)}" x2="${X(1)}" y1="4" y2="${h - 22}" stroke="var(--ink)" stroke-dasharray="4 3" opacity="0.6"/>`;
-  rows.forEach((r, i) => {
-    const y = 6 + i * rh, sel = state.atlas.sel === r.key;
-    s += `<g class="atlas-hit" data-atlas="${esc(r.key)}" style="cursor:pointer"><rect x="0" y="${y - 2}" width="${w}" height="${rh}" fill="${sel ? "var(--raised)" : "transparent"}"/>
-      <text x="${L - 8}" y="${y + 13}" text-anchor="end" font-size="12" fill="var(--ink)" font-family="var(--sans)">${esc(r.name.length > 26 ? r.name.slice(0, 25) + "…" : r.name)}</text>
-      <rect x="${L}" y="${y + 3}" width="${Math.max(1, X(by(r)) - L)}" height="${rh - 8}" rx="2" fill="${GROUP_COLORS[r.group]}"/>
-      ${piece && r.bs > 1e-4 ? `<line x1="${X(r.bs)}" x2="${X(r.bs)}" y1="${y}" y2="${y + rh - 2}" stroke="var(--ink)" stroke-width="2" opacity="0.7"/>` : ""}
-      <text x="${Math.max(X(by(r)), piece && r.bs > 1e-4 ? X(r.bs) : 0) + 6}" y="${y + 13}" font-size="11" fill="var(--muted)" font-family="var(--mono)">${fmt(by(r))}</text></g>`;
-  });
-  return s + "</svg>";
-}
-// Absorption against felt weight: above the panel line beats a flat 50 mm panel of the same felt.
-function massChart(rows) {
-  const w = 680, h = 320, L = 50, B = 40, T = 12, Rr = 14, pts = rows.filter((r) => r.mass > 1e-3);
-  const xm = Math.max(0.5, ...pts.map((r) => r.mass)) * 1.08, ym = Math.max(0.1, ...pts.map((r) => r.score)) * 1.1, X = (v) => L + (v / xm) * (w - L - Rr), Y = (v) => T + (1 - v / ym) * (h - T - B);
-  const k = pts.filter((r) => r.bs > 0).reduce((a, r) => a + r.bs / r.mass, 0) / Math.max(1, pts.filter((r) => r.bs > 0).length);
-  let s = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Absorption against felt weight">`;
-  for (let v = 0; v <= ym; v += ym > 2 ? 0.5 : 0.25) s += `<line x1="${L}" x2="${w - Rr}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="10" fill="var(--muted)" font-family="var(--mono)">${v.toFixed(2)}</text>`;
-  for (let v = 0; v <= xm; v += xm > 8 ? 2 : 1) s += `<text x="${X(v)}" y="${h - B + 16}" text-anchor="middle" font-size="10" fill="var(--muted)" font-family="var(--mono)">${v} kg</text>`;
-  if (k > 0) s += `<line x1="${X(0)}" y1="${Y(0)}" x2="${X(Math.min(xm, ym / k))}" y2="${Y(Math.min(xm, ym / k) * k)}" stroke="var(--ink)" stroke-dasharray="5 4" opacity="0.6"/><text x="${X(Math.min(xm, ym / k)) - 4}" y="${Y(Math.min(xm, ym / k) * k) + 14}" text-anchor="end" font-size="10" fill="var(--muted)" font-family="var(--sans)">flat 50 mm panel, same felt</text>`;
-  s += `<text x="${(L + w) / 2}" y="${h - 6}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--sans)">felt per piece →</text>`;
-  const top = new Set(pts.slice().sort((p, q) => q.score - p.score).slice(0, 6).map((r) => r.key));
-  for (const r of pts) {
-    s += `<g class="atlas-hit" data-atlas="${esc(r.key)}" style="cursor:pointer"><circle cx="${X(r.mass)}" cy="${Y(r.score)}" r="${state.atlas.sel === r.key ? 7 : 5}" fill="${GROUP_COLORS[r.group]}" stroke="var(--app)" stroke-width="1.5"/>
-      ${top.has(r.key) || state.atlas.sel === r.key ? `<text x="${X(r.mass) + 8}" y="${Y(r.score) + 4}" font-size="11" fill="var(--ink)" font-family="var(--sans)">${esc(r.name)}</text>` : ""}<title>${esc(r.name)}: ${fix(r.score, 2)} m², ${fix(r.mass, 1)} kg</title></g>`;
-  }
-  return s + "</svg>";
-}
-const miniBars = (area, max) => `<span class="minib">${area.map((a) => `<i style="height:${Math.max(2, (a / max) * 100)}%"></i>`).join("")}</span>`;
+const galKey = (k, m) => [k, m, state.atlas.mode, state.atlas.mode === "random" ? state.atlas.seed : 0, state.atlas.felt].join("|");
 function atlasCanvas() {
-  const a = state.atlas, c = $("#canvas"), stale = a.rows && a.key !== atlasKey(), rows = atlasRows();
+  const a = state.atlas, c = $("#canvas"), keys = galleryKeys();
   FormView.detach(); FormWave.stop(); View3D.detach();
-  const mechs = [["Friction in pores", "Air squeezing through the tiny gaps between fibres rubs and turns into a little heat. All felt, foam and fibre works this way. Thicker = lower pitches."],
-    ["Depth and air gaps", "Felt works where air moves fastest, a quarter wavelength from a hard surface. Depth, cells and air gaps behind the felt move absorption down to lower pitches."],
-    ["Resonance", "Cavities with a narrow opening (a bottle) or long channels (an organ pipe) ring at one pitch and swallow it: good for the low rumble felt alone can't reach."],
-    ["Open sheets and edges", "Thin felt hung in free air works on both faces and its edges. Spreading the same felt out into open, separated sheets catches more than packing it into one block."]];
-  const sel = rows.find((r) => r.key === a.sel);
-  c.innerHTML = `<div class="artboard"><div class="card-head"><h2>Structures and surfaces: how they absorb</h2><span class="muted">${MOUNT_NAME[a.mount]} · ${fix(state.fSize, 1)} m · ${esc(E.FELTS[a.material].name)} · ${state.fBudget} kg per piece</span></div>
-      <p>Every generator measured the same way: the same size, felt, place and budget, a neutral genome (every value in the middle) and an even field. So the differences come from the <strong>shape</strong> alone.</p>
-      <div class="mech-grid">${mechs.map(([t, d]) => `<div class="mech"><strong>${t}</strong><span>${d}</span></div>`).join("")}</div></div>
-    ${!a.rows || a.busy ? `<div class="card"><h3>${a.busy ? "Measuring…" : "Not measured yet"}</h3><p class="hint">${a.busy ? "Sending sound through every structure, one by one." : "Press <strong>Measure all</strong> in the options bar: about 15 seconds."}</p>
-      ${a.busy ? `<span class="progress wide"><i id="atlas-progress" style="width:${a.progress * 100}%"></i></span>` : ""}</div>` : `
-    ${stale ? '<p class="hint">Settings changed since this measurement: press Measure all again to update.</p>' : ""}
-    ${sel ? `<div class="card" id="atlas-detail"><div class="card-head"><h3>${esc(sel.name)}</h3><span class="hint">${esc(sel.group)}${MECH[sel.rule || sel.key] ? " · " + MECH[sel.rule || sel.key][0] : ""}</span></div>
-      <div class="field-pair"><div id="fv-slot"></div><div class="group">
-        <p>${esc(MECH[sel.rule || sel.key] ? MECH[sel.rule || sel.key][1] : "")}</p>
-        <dl class="facts">${G.BANDS.map((b, i) => `<dt>${hz(b)}</dt><dd>${fix(sel.area[i], 2)} m²</dd>`).join("")}<dt>Felt</dt><dd>${fix(sel.mass, 1)} kg</dd>${sel.print > 0.05 ? `<dt>Structure</dt><dd>${fix(sel.print, 1)} kg</dd>` : ""}
-          <dt>vs panel</dt><dd>${sel.bs > 1e-4 ? fix(sel.score / sel.bs, 1) + "×" : "–"}</dd><dt>Best for</dt><dd>${bestFor(sel.area)}</dd></dl>
-        <p class="hint">Made as: ${esc(MECH[sel.rule || sel.key] ? MECH[sel.rule || sel.key][2] : "")}</p>
-        <div class="chips"><button class="btn small primary" id="atlas-open">Open in the Studio</button><button class="chip" data-ask="Explain simply why the ${esc(sel.name)} absorbs sound the way it does, and how I could make it absorb more.">Ask the guide</button></div></div></div></div>` : ""}
-    <div class="card"><div class="card-head"><h3>Ranking for “${TARGET_INFO[state.target].label}”</h3>
-      <div class="seg" role="group" aria-label="Rank by">${Object.entries(RANK_BY).map(([k, [l]]) => `<button data-rank="${k}" aria-pressed="${a.rankBy === k}">${l}</button>`).join("")}</div>
-      <div class="legend">${Object.entries(GROUP_COLORS).map(([g2, col]) => `<span><i class="box" style="background:${col}"></i>${g2}</span>`).join("")}<span><i style="background:var(--ink)"></i>flat panel, same felt and kg</span></div></div>
-      <div class="chart-scroll">${rankChart(rows)}</div><p class="hint">${{ piece: "Absorption per piece in m² (Sabine), weighted for your target; the black tick is a flat panel of the same felt and kg. Big, heavy pieces win here.", kg: "Absorption for each kg of felt: how efficiently the shape uses its material.", panel: "How many times a flat 50 mm panel of the same felt and kg: the effect of the shape alone (dashed line = no better than a panel)." }[a.rankBy]} Click a bar to see the piece.</p></div>
-    <div class="card"><div class="card-head"><h3>Absorption against weight</h3><span class="hint">Above the dashed line a shape beats a flat panel of the same felt and weight</span></div><div class="chart-scroll">${massChart(rows)}</div></div>
-    <div class="card"><h3>By pitch</h3><div class="table-wrap"><table><thead><tr><th>Structure</th><th>How it absorbs</th><th>250 · 500 · 1k Hz</th><th class="num">250 Hz</th><th class="num">500 Hz</th><th class="num">1 kHz</th><th class="num">Felt</th><th class="num">m² per kg</th><th class="num">vs panel</th><th>Best for</th></tr></thead><tbody>
-      ${(() => { const mx = Math.max(0.05, ...rows.map((r) => Math.max(...r.area))); return rows.map((r) => `<tr class="${a.sel === r.key ? "current" : ""}" data-atlas="${esc(r.key)}"><td><i class="dot" style="background:${GROUP_COLORS[r.group]}"></i>${esc(r.name)}</td><td>${esc(MECH[r.rule || r.key] ? MECH[r.rule || r.key][0] : "")}</td><td>${miniBars(r.area, mx)}</td>
-        ${r.area.map((x) => `<td class="num">${fix(x, 2)}</td>`).join("")}<td class="num">${fix(r.mass, 1)} kg</td><td class="num">${r.mass > 1e-3 ? fix(r.score / r.mass, 2) : "–"}</td><td class="num">${r.bs > 1e-4 ? fix(r.score / r.bs, 1) + "×" : "–"}</td><td>${bestFor(r.area)}</td></tr>`).join(""); })()}
-      </tbody></table></div>
-      <p class="hint">Structures go through the wave simulator (250 to 1000 Hz), which reads about 25% low for all of them alike. Surface textures use the more exact layer model, so next to structures they are slightly favoured; their full curve is below. A neutral genome ignores the felt budget, so some pieces are heavy: compare per kg or versus a panel too.</p></div>
-    ${rows.some((r) => r.alpha) ? `<div class="card"><h3>Surface textures over the full range (per m² of face)</h3><div class="chart-scroll">${lineChart(rows.filter((r) => r.alpha).map((r, i) => ({ label: r.name, color: MAT_COLORS[i % MAT_COLORS.length], alpha: r.alpha })), { yMax: rows.some((r) => r.key === "cloud") ? 2 : 1, weights: E.bandWeights(state.target) })}</div>
-      <div class="legend">${rows.filter((r) => r.alpha).map((r, i) => `<span><i style="background:${MAT_COLORS[i % MAT_COLORS.length]}"></i>${esc(r.name)}</span>`).join("")}</div></div>` : ""}`}`;
-  if (sel) {
-    FormView.show($("#fv-slot"), sel.form);
-    $("#atlas-open").onclick = () => {
-      const rule = sel.rule || sel.key;
-      state.fMount = state.atlas.mount; state.allMounts = false; state.matPick = state.atlas.material;
-      if (sel.group === "My structures") state.formSel = sel.form.id; else { state.formSel = null; if (G.RULES[rule]) state.lab.genes[rule] = sel.form.genes.slice(); }
-      state.ws = "grow"; setTool(rule); renderAll();
-    };
-  }
+  const rows = keys.map((k) => {
+    const name = isSurf(k) ? E.FAMILY[k].name : G.RULES[k].name, imitates = isSurf(k) ? E.FAMILY[k].imitates : G.RULES[k].imitates, grp = GROUP_OF(k);
+    return `<div class="gal-card"><div class="gal-head"><i class="dot" style="background:${GROUP_COLORS[grp]}"></i><strong>${esc(name)}</strong><span class="muted">${esc(grp)}${MECH[k] ? " · " + MECH[k][0] : ""}</span></div>
+      <div class="gal-row">${galleryMounts().map(([m, label]) => { const url = a.cache[galKey(k, m)];
+        return `<button class="gal-th" data-gal="${k}" data-gal-mount="${m}" ${url === null ? "disabled" : ""} title="Open in the Studio: ${esc(name)}, ${label.toLowerCase()}">${url === null ? '<div class="th-none">only hangs</div>' : `<img id="th-${k}-${m}" class="${url ? "" : "waiting"}" alt="${esc(name)}, ${label.toLowerCase()}" ${url ? `src="${url}"` : ""}>`}<small>${label}</small></button>`; }).join("")}</div>
+      <p class="hint">Imitates ${esc(imitates)}.</p></div>`;
+  });
+  c.innerHTML = `<div class="artboard"><div class="card-head"><h2>Every generator, three ways</h2><span class="muted">${a.mode === "middle" ? "Every value in the middle" : `Random generations, seed ${a.seed}`} · 1.2 m · ${esc(E.FELTS[a.felt].name)}</span></div>
+      <p>Each generator grown three ways: as a <strong>wall</strong> (a double-sided partition, ${state.wallHung ? "hung from the ceiling" : "standing on the ground"}), as a single <strong>freestanding</strong> module, and as a <strong>ceiling</strong> piece. Patterns are steered by two interfering waves so you can see them respond. Press <strong>New generations</strong> for other possibilities; click any picture to open that generation in the Studio's graph.</p>
+      ${a.done < a.total ? `<span class="progress wide"><i id="atlas-progress" style="width:${a.total ? (a.done / a.total) * 100 : 0}%"></i></span>` : ""}</div>
+    ${a.filter === "eye" ? myGallery() : `<div class="gal-grid">${rows.join("")}</div>`}`;
+  if (a.filter !== "eye") fillGallery();
 }
-$("#canvas").addEventListener("click", (e) => { const rb = e.target.closest("[data-rank]"); if (rb && state.ws === "atlas") { state.atlas.rankBy = rb.dataset.rank; renderCanvas(); renderDock(); return; } const t = e.target.closest("[data-atlas]"); if (t && state.ws === "atlas") { state.atlas.sel = t.dataset.atlas; renderCanvas(); renderDock(); $("#canvas").scrollTo({ top: 0, behavior: "smooth" }); } });
+// Your own grown structures, as they are.
+function myGallery() {
+  if (!state.forms.length) return '<div class="card"><p class="hint">Nothing grown yet. Grow structures in the Studio and they appear here.</p></div>';
+  return `<div class="gal-grid">${state.forms.map((f) => { const k = "my" + f.id; if (state.atlas.cache[k] === undefined) state.atlas.cache[k] = Thumbs.render(f);
+    return `<div class="gal-card"><div class="gal-head"><i class="dot" style="background:${GROUP_COLORS["My structures"]}"></i><strong>${esc(f.name)}</strong><span class="muted">${MOUNT_NAME[f.mount]} · ${fix(f.score, 2)} m²</span></div>
+      <div class="gal-row one"><button class="gal-th" data-gal-form="${f.id}"><img alt="${esc(f.name)}" src="${state.atlas.cache[k]}"><small>${MOUNT_NAME[f.mount]}</small></button></div></div>`; }).join("")}</div>`;
+}
+$("#canvas").addEventListener("click", (e) => {
+  if (state.ws !== "atlas") return;
+  const t = e.target.closest("[data-gal]"), mine = e.target.closest("[data-gal-form]");
+  if (mine) { state.formSel = Number(mine.dataset.galForm); const f = selForm(); state.ws = "grow"; state.fMount = f.mount; setTool(f.rule); renderAll(); return; }
+  if (!t || t.disabled) return;
+  const k = t.dataset.gal, m = t.dataset.galMount;
+  state.ws = "grow"; state.fMount = m; state.allMounts = false; state.formSel = null; state.matPick = state.atlas.felt;
+  if (G.RULES[k]) { state.lab.genes[k] = galleryGenes(k, G.geneCount(k)); state.lab.tested = null; }
+  setTool(k); renderAll();
+});
 function atlasBar(ob) {
   const a = state.atlas;
-  ob.innerHTML = `<div class="opt"><div class="segd" role="group" aria-label="Where the pieces go">${[["standing", "Floor"], ["wall", "Wall"], ["hanging", "Ceiling"]].map(([k, l]) => `<button data-atlas-mount="${k}" aria-pressed="${a.mount === k}">${l}</button>`).join("")}</div></div>
-    <span class="divider"></span>${targetSelect()}<span class="divider"></span>
-    <div class="opt"><label for="atlas-mat">Felt</label><select id="atlas-mat">${GROUP_ORDER.map((g) => `<optgroup label="${g}">${Object.entries(E.FELTS).filter(([, m]) => m.group === g).map(([k, m]) => `<option value="${k}" ${a.material === k ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</optgroup>`).join("")}</select></div>
-    <span class="spacer"></span><button class="btn primary" id="atlas-measure" ${a.busy ? "disabled" : ""}>${a.busy ? "Measuring…" : a.rows ? "Measure again" : "Measure all"}</button>`;
-  $$("[data-atlas-mount]").forEach((b) => b.onclick = () => { a.mount = b.dataset.atlasMount; renderOptbar(); renderCanvas(); });
-  $("#atlas-mat").onchange = (e) => { a.material = e.target.value; renderCanvas(); };
-  $("#target").onchange = (e) => { state.target = e.target.value; renderCanvas(); renderStatus(); };
-  $("#atlas-measure").onclick = measureAtlas;
+  ob.innerHTML = `<div class="opt"><div class="segd" role="group" aria-label="Which generations"><button data-gal-mode="middle" aria-pressed="${a.mode === "middle"}">Middle values</button><button data-gal-mode="random" aria-pressed="${a.mode === "random"}">Random</button></div></div>
+    <button class="btn small" id="gal-new">New generations</button>
+    <span class="divider"></span><div class="opt"><span class="muted">Walls</span><div class="segd small" role="group" aria-label="How walls stand">${[["ground", "On the ground"], ["hung", "Hung"]].map(([k, l]) => `<button data-gal-wall="${k}" aria-pressed="${(k === "hung") === !!state.wallHung}">${l}</button>`).join("")}</div></div>
+    <span class="divider"></span>
+    <div class="opt"><label for="atlas-mat">Felt</label><select id="atlas-mat">${GROUP_ORDER.map((g) => `<optgroup label="${g}">${Object.entries(E.FELTS).filter(([, m]) => m.group === g).map(([k, m]) => `<option value="${k}" ${a.felt === k ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</optgroup>`).join("")}</select></div>
+    <span class="spacer"></span><span class="hint">Click a picture to open it in the Studio</span>`;
+  $$("[data-gal-mode]").forEach((b) => b.onclick = () => { a.mode = b.dataset.galMode; renderOptbar(); renderCanvas(); });
+  $$("[data-gal-wall]").forEach((b) => b.onclick = () => { state.wallHung = b.dataset.galWall === "hung"; if (G.isWall(state.fMount)) state.fMount = wallMount(); renderOptbar(); renderCanvas(); });
+  $("#gal-new").onclick = () => { a.mode = "random"; a.seed++; renderOptbar(); renderCanvas(); };
+  $("#atlas-mat").onchange = (e) => { a.felt = e.target.value; renderCanvas(); };
 }
 function atlasPanel() {
-  const rows = atlasRows(), groups = {};
-  for (const r of rows) (groups[r.group] = groups[r.group] || []).push(r);
-  return `<details class="panel" open id="panel-atlas"><summary>What wins, and why</summary><div class="panel-body">
-    ${rows.length ? `<p class="hint">Best of each family, ${RANK_BY[state.atlas.rankBy][0].toLowerCase()}:</p>` + Object.entries(groups).map(([g, list]) => `<p><i class="dot" style="background:${GROUP_COLORS[g]}"></i><strong>${g}</strong>: ${esc(list[0].name)}, ${fix(list[0].score, 2)} m² from ${fix(list[0].mass, 1)} kg${list[0].bs > 1e-4 ? ` (${fix(list[0].score / list[0].bs, 1)}× a panel)` : ""}.</p>`).join("")
-      + `<p class="hint">With a neutral genome. Grown and evolved versions do better: use these as a map of where to start.</p>` : '<p class="hint">Measure to compare. Change the place (floor, wall, ceiling), the felt or what to quiet and measure again: the ranking changes.</p>'}</div></details>`;
+  return `<details class="panel" open id="panel-atlas"><summary>Families</summary><div class="panel-body">
+    ${Object.entries(GROUP_COLORS).map(([g, col]) => `<p><i class="dot" style="background:${col}"></i>${g}</p>`).join("")}
+    <p class="hint">Use the toolbar on the left to show one family. Walls are double-sided partitions that join edge to edge, on feet or hung on cables; freestanding modules get their own holdfast; ceiling pieces hang overhead.</p></div></details>`;
 }
+
 // ------------------------------------------------------- surface pieces ----
 // Surface textures as freestanding pieces: the texture grows on both faces of a thin rigid core
 // (a double-sided screen on two sled feet), or as a hanging slab for the hanging cloud. Their
@@ -2843,10 +2841,10 @@ function info(key) {
   return { name: fam.name, imitates: fam.imitates, idea: fam.idea, group: "surface" };
 }
 const describeOf = (f) => (f.kind === "surface" ? explain(f.engine).slice(0, -1).join(" ") : G.RULES[f.rule].describe(f.genes));
-const surfFaces = (key, mount) => (key === "cloud" || mount === "wall" ? 1 : 2); // the cloud's alpha already counts both of its faces; a wall module has one
+const surfFaces = (key, mount) => (key === "cloud" || mount === "hanging" ? 1 : 2); // the cloud's alpha already counts both of its faces; a ceiling panel faces down
 function surfGeom(size, mount, key) {
   const env = G.envelope(size, mount);
-  if (key === "cloud" || mount === "wall") return { W: size, H: size, face: size * size };
+  if (key === "cloud" || mount === "hanging") return { W: size, H: size, face: size * size };
   return { W: size, H: env.height - 0.1, face: size * (env.height - 0.1) };
 }
 function surfBrief(key, size = state.fSize, mount = state.fMount) {
@@ -2925,13 +2923,16 @@ function surfParts(r, size, mount) {
     parts.label = "4 hanging cables";
     return parts;
   }
-  if (mount === "wall") {
-    // one textured face on a backing board fixed to the wall (y = 0)
-    parts.push({ c: [0, 0.0045, H / 2], u: [W / 2, 0, 0], v: [0, 0, H / 2], t: 0.009, structure: true }, ...surfFace(r, 1, W, H, 0));
-    parts.label = "a backing board on a wall cleat";
+  if (mount === "hanging") {
+    // a ceiling panel: one textured face looking down from a backing board on 4 cables
+    const face = [{ c: [0, 0.0045, H / 2], u: [W / 2, 0, 0], v: [0, 0, H / 2], t: 0.009, structure: true }, ...surfFace(r, 1, W, H, 0)];
+    parts.push(...G.mapParts(face, (q) => [q[0], q[2] - H / 2, -0.3 - q[1]]));
+    for (const [cx, cy] of [[-W / 3, -W / 3], [W / 3, -W / 3], [-W / 3, W / 3], [W / 3, W / 3]]) parts.push({ a: [cx, cy, 0], b: [cx, cy, -0.3], r: 0.003, structure: true });
+    parts.label = "4 hanging cables";
     return parts;
   }
-  const hanging = mount === "hanging", z0 = hanging ? -H - 0.1 : 0.1;
+  // a double-sided screen: freestanding, a wall partition on feet, or a partition hung from the ceiling
+  const hanging = G.hung(mount), z0 = hanging ? -H - 0.1 : 0.1;
   parts.push({ c: [0, 0, z0 + H / 2], u: [W / 2, 0, 0], v: [0, 0, H / 2], t: 0.009, structure: true });
   for (const sign of [1, -1]) parts.push(...surfFace(r, sign, W, H, z0));
   if (hanging) {
@@ -2954,7 +2955,7 @@ function surfPiece(r, sKey, size = state.fSize, mount = state.fMount) {
   const oct = R.thirdToOctave(r.alpha), parts = surfParts(r, size, mount), felt = E.FELTS[r.params.porous];
   const perPiece = [1, 2, 3].map((i) => oct[i] * area), w = formBandWeights(), score = perPiece.reduce((a, x, i) => a + x * w[i], 0), mass = r.mass * area;
   const vox = G.voxelize(parts, 0.05), feltMass = felt ? vox.volume * felt.density : 0;
-  const stance = mount === "standing" && r.family !== "cloud" ? G.stability(parts, vox.com, mass, E.RIGIDS[sKey].density) : null;
+  const stance = G.onGround(mount) && r.family !== "cloud" ? G.stability(parts, vox.com, mass, E.RIGIDS[sKey].density) : null;
   let fitness = r.fitness * area;
   if (stance && !stance.ok) fitness -= score * 0.8;
   return { kind: "surface", rule: r.family, family: r.family, engine: r, params: r.params, alpha18: r.alpha, genes: [], mount: r.family === "cloud" ? "hanging" : mount, size,
@@ -2987,12 +2988,12 @@ function renderStatus() {
   if (gmode() === "forms") {
     const sp = curSpace(), rr = sp && spaceCalc(sp).res;
     s.innerHTML = `${sp ? `<span>${esc(sp.name)}</span><span class="mono">echo ${fix(rr.speechRtAfter, 2)} s (aim ${fix(rr.target, 2)} s)</span>` : ""}${state.fGrowing ? `<span>Growing and testing</span><span class="progress"><i style="width:${state.fProgress * 100}%"></i></span>` : `<span>${state.forms.length} forms grown</span>`}
-      <span>${state.allMounts ? "wall, ceiling and floor" : MOUNT_NAME[state.fMount].toLowerCase()}</span><span class="mono">${fix(state.fSize, 1)} m · ${state.fBudget} kg</span><span>${state.matPick === "auto" ? `best of ${state.porous.size} materials` : esc(E.FELTS[state.matPick].name)}</span><span>Wave simulator: 2D slices at 250, 500 and 1000 Hz</span>`;
+      <span>${state.allMounts ? "wall, freestanding and ceiling" : MOUNT_NAME[state.fMount].toLowerCase()}</span><span class="mono">${fix(state.fSize, 1)} m · ${state.fBudget} kg</span><span>${state.matPick === "auto" ? `best of ${state.porous.size} materials` : esc(E.FELTS[state.matPick].name)}</span><span>Wave simulator: 2D slices at 250, 500 and 1000 Hz</span>`;
     return;
   }
   if (state.ws === "atlas") {
     const a = state.atlas;
-    s.innerHTML = `<span>Structures</span><span>${MOUNT_NAME[a.mount].toLowerCase()}</span><span>${esc(E.FELTS[a.material].name)}</span><span class="mono">${fix(state.fSize, 1)} m · ${state.fBudget} kg</span><span>${a.rows ? `${atlasRows().length} measured` : "not measured yet"}</span><span>Wave simulator: 2D slices at 250, 500 and 1000 Hz</span>`;
+    s.innerHTML = `<span>Structures</span><span>${a.mode === "middle" ? "middle values" : "random generations, seed " + a.seed}</span><span>${esc(E.FELTS[a.felt].name)}</span><span class="mono">1.2 m</span><span>${galleryKeys().length} generators × wall, freestanding, ceiling</span>`;
     return;
   }
   if (state.ws === "spaces") {
@@ -3009,10 +3010,10 @@ function renderStatus() {
 const TIPS = {
   shapes: { text: "Surface textures: set what to quiet, the <strong>depth</strong> and the <strong>budget</strong> in the bar above, then press <strong>Grow</strong>. Free forms are further down the toolbar.",
     chips: ["Why did this shape win?", "How deep should it be?", "How would I make it?"] },
-  forms: { text: "Pick the <strong>room</strong>, where it goes (<strong>floor, wall, ceiling</strong> or all 3) and a <strong>generator</strong> in the toolbar. Each one opens as a <strong>graph</strong>: drag values and watch it regrow, lock what you like, then <strong>Test</strong> or <strong>Evolve</strong>, and <strong>Place in this room</strong>.",
+  forms: { text: "Pick the <strong>room</strong>, what to grow (<strong>wall</strong> on the ground or hung, a <strong>freestanding</strong> module, a <strong>ceiling</strong> piece, or all 3) and a <strong>generator</strong> in the toolbar. Each one opens as a <strong>graph</strong>: drag values and watch it regrow, lock what you like, then <strong>Test</strong> or <strong>Evolve</strong>, and <strong>Place in this room</strong>.",
     chips: ["Which form works best?", "What is Biothing, simply?", "How would I make this form?"] },
-  atlas: { text: "Every structure and surface measured the same way. Pick the place (<strong>floor, wall, ceiling</strong>), the felt and what to quiet, press <strong>Measure all</strong>, then click a bar to see the piece and why it absorbs.",
-    chips: ["Why do open sheets beat a solid block?", "Which shape for low pitches?", "Why don't printed lattices absorb?"] },
+  atlas: { text: "Every generator grown three ways: on a <strong>wall</strong>, <strong>freestanding</strong> and from the <strong>ceiling</strong>. Press <strong>New generations</strong> to see other possibilities, and click a picture to open it in the Studio.",
+    chips: ["Which generator suits a wall best?", "Why do open sheets absorb well?", "Why don't printed lattices absorb?"] },
   materials: { text: "Tick the materials you like. The chart shows each one as a plain flat layer, so you see the material before any shaping.",
     chips: ["Which material is best for me?", "Explain the chart", "Which are the most natural?"] },
   spaces: { text: "Add your exhibition areas (or import a 3D model), set the finishes and visitors, then place grown shapes. Aim for the <strong>recommended</strong> echo.",
@@ -3025,7 +3026,7 @@ function renderGuideTip() {
 }
 document.addEventListener("click", (e) => { const c = e.target.closest("[data-ask]"); if (c) ask(c.dataset.ask); });
 
-const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing): all of them in one Structures workspace: surface textures (panel-like families) and free objects. The product must be freestanding: standing forms grow a holdfast (splayed roots or a plinth) and must lean 10 degrees before toppling. Forms come from natural rules (branching tree, snow crystal, folding coral, spiral shell, foam) or sheet hybrids (felt sheets arranged as a leaf canopy, mushroom gills, pine cone or twisted lamellae), or the Sound-grown membrane after Biothing's Genware (a sound source, either the target sound, an uploaded recording or a room's resonances, becomes a field of air motion; a cellular felt membrane grows denser where air moves most and the field is updated by what has grown over three rounds). A seed library keeps genomes the designer likes and starts new growth from them (after Malafouris's essay on Genware as a "library of seeds" changed by what grows); it can be saved and loaded at the next venue. Further ideas from Andrasek's AA lecture "Material Potency": the Interference cut-sheet (after her New Museum ceiling, where wave interference was cut into flat laser-cut sheets that gravity bent into 3D): one flat felt sheet with three-sided flap cuts, larger and more open where the room's sound field is strong; each flap sags under its own weight depending on the felt's density and thickness (top hinges sag, side hinges hold), and it exports an SVG cut file. "Grow a speech skin": a second, finer growth of felt tufts on a grown form, drawn by the speech-band sound (one behaviour grown on another, like her tower and its skin). "Grow 6 variants": a family whose genes move within brackets of elasticity around the parent, all different but one nature, like dunes in one desert. "Where pieces help most": a probability map of the room plan (low pitches: room standing waves at ear height, since felt works where air moves; speech: a band 0.4-1.6 m from the walls) from which layouts A, B, C are drawn by chance, after her tower project's probabilistic programme. Positions do not change the Sabine echo numbers. Every generator can grow for a wall (pressed into a relief, tested against the wall), the ceiling or the floor, or all three in one run; seeds are kept per place. Every single generator opens as a graph like Grasshopper or nTop: nodes Seed and place (mount, size, random seed), Field (from sound: target sound, recording, room resonances; or drawn: attractor point, gradient, rings, two interfering waves, noise), the rule's own values grouped as Cell / Response to the field / Holdfast, Material, and Evolve (population, generations, mutation, start from seeds). Each value can be dragged (live 3D preview), locked, or given a range for evolution; Test runs the wave simulator on the exact form; Keep adds it; Watch it grow replays the order it grew in. Pattern and lattice generators: Voronoi cells (open cells, funnels, stepped web), Felt petals on sunflower spirals, Slotted felt strips (egg-crate with a strip cut file), Strut lattice (cubic, body-centred, octet, diamond, honeycomb; printed, graded, wavy, felt balls in cells), Minimal surface TPMS (gyroid, Schwarz P, diamond; printed shell with felt in one labyrinth), Spatial lattice (a printed lattice filling a column-into-canopy or a cloud, like Biothing's robotically printed pergola), Cellular automata (3D neighbour rules over generations: coral, sponge, crystal), Liquid bioform (blended blobs, or pulls stretched out of a slab after Ross Lovegrove's Liquid Table Bioform, as a heat-formed felt shell with holes). Printed struts and shells barely absorb because their gaps are far too big to rub the air; felt does the absorbing. A third tab, Structures, measures every surface texture and growth rule the same way (same size, felt, place and budget, a neutral genome with every value in the middle, an even field), ranks them for the target, plots absorption against felt weight with the flat-panel line, lists absorption at 250/500/1000 Hz, m2 per kg, times a panel and what each is best for, and explains the mechanism of each (friction in pores, graded porosity, depth and cavities, air gaps, resonators, felt in free air, edges and open sheets, felt in a printed frame, shells with holes, fibre mats). When asked about Biothing, explain simply: grow, don't draw; simple local rules give rich results; differentiation within one nature; material computation; the environment steers growth; a garden of seeds; the designer guides like a gardener. Everything is tested in a 2D wave simulator that reads about 25% conservative. Everything happens in one Studio mode around the selected room (a ready-made room or the user's OBJ model): it is shown in 3D, structures are grown and placed in it, and its echo and crowd noise update. The target "This room's needs" weights each pitch by how much the room rings too long there. A Materials tab compares materials. The person is a designer, not an acoustic engineer.
+const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing): all of them in one Structures workspace: surface textures (panel-like families) and free objects. The product must be freestanding: standing forms grow a holdfast (splayed roots or a plinth) and must lean 10 degrees before toppling. Forms come from natural rules (branching tree, snow crystal, folding coral, spiral shell, foam) or sheet hybrids (felt sheets arranged as a leaf canopy, mushroom gills, pine cone or twisted lamellae), or the Sound-grown membrane after Biothing's Genware (a sound source, either the target sound, an uploaded recording or a room's resonances, becomes a field of air motion; a cellular felt membrane grows denser where air moves most and the field is updated by what has grown over three rounds). A seed library keeps genomes the designer likes and starts new growth from them (after Malafouris's essay on Genware as a "library of seeds" changed by what grows); it can be saved and loaded at the next venue. Further ideas from Andrasek's AA lecture "Material Potency": the Interference cut-sheet (after her New Museum ceiling, where wave interference was cut into flat laser-cut sheets that gravity bent into 3D): one flat felt sheet with three-sided flap cuts, larger and more open where the room's sound field is strong; each flap sags under its own weight depending on the felt's density and thickness (top hinges sag, side hinges hold), and it exports an SVG cut file. "Grow a speech skin": a second, finer growth of felt tufts on a grown form, drawn by the speech-band sound (one behaviour grown on another, like her tower and its skin). "Grow 6 variants": a family whose genes move within brackets of elasticity around the parent, all different but one nature, like dunes in one desert. "Where pieces help most": a probability map of the room plan (low pitches: room standing waves at ear height, since felt works where air moves; speech: a band 0.4-1.6 m from the walls) from which layouts A, B, C are drawn by chance, after her tower project's probabilistic programme. Positions do not change the Sabine echo numbers. Every generator can grow as a wall (a double-sided partition that joins edge to edge with others, standing on the ground on feet or hung from the ceiling on cables), as a single freestanding module, or as a ceiling piece hanging overhead, or all three in one run; seeds are kept per place. In the room, wall modules form partitions across the room with passages at the ends. Every single generator opens as a graph like Grasshopper or nTop: nodes Seed and place (mount, size, random seed), Field (from sound: target sound, recording, room resonances; or drawn: attractor point, gradient, rings, two interfering waves, noise), the rule's own values grouped as Cell / Response to the field / Holdfast, Material, and Evolve (population, generations, mutation, start from seeds). Each value can be dragged (live 3D preview), locked, or given a range for evolution; Test runs the wave simulator on the exact form; Keep adds it; Watch it grow replays the order it grew in. Pattern and lattice generators: Voronoi cells (open cells, funnels, stepped web), Felt petals on sunflower spirals, Slotted felt strips (egg-crate with a strip cut file), Strut lattice (cubic, body-centred, octet, diamond, honeycomb; printed, graded, wavy, felt balls in cells), Minimal surface TPMS (gyroid, Schwarz P, diamond; printed shell with felt in one labyrinth), Spatial lattice (a printed lattice filling a column-into-canopy or a cloud, like Biothing's robotically printed pergola), Cellular automata (3D neighbour rules over generations: coral, sponge, crystal), Liquid bioform (blended blobs, or pulls stretched out of a slab after Ross Lovegrove's Liquid Table Bioform, as a heat-formed felt shell with holes). Printed struts and shells barely absorb because their gaps are far too big to rub the air; felt does the absorbing. A third tab, Structures, is a gallery: every surface texture and growth rule grown three ways (on a wall, freestanding, from the ceiling), with middle values or random generations; clicking a picture opens that generation in the Studio's graph. When asked about Biothing, explain simply: grow, don't draw; simple local rules give rich results; differentiation within one nature; material computation; the environment steers growth; a garden of seeds; the designer guides like a gardener. Everything is tested in a 2D wave simulator that reads about 25% conservative. Everything happens in one Studio mode around the selected room (a ready-made room or the user's OBJ model): it is shown in 3D, structures are grown and placed in it, and its echo and crowd noise update. The target "This room's needs" weights each pitch by how much the room rings too long there. A Materials tab compares materials. The person is a designer, not an acoustic engineer.
 How to answer:
 - Simple, everyday words; explain any technical word in a few words the first time.
 - Short: at most about 120 words unless asked for more. Short paragraphs or a few bullets.
@@ -3039,14 +3040,14 @@ function pageState() {
   ];
   if (gmode() === "shapes" && state.tool !== "all") lines.push(`Inspecting: ${E.FAMILY[state.tool].name}`);
   lines.push(`Sound source for membranes: ${gwLabel()}${state.gw.field ? " (field computed)" : ""}${state.gw.file ? `; file ${state.gw.file.name}, ${Math.round(state.gw.file.bpm)} BPM` : ""}; seed library: ${Object.entries(state.seeds).map(([k, l]) => `${l.length} ${k}`).join(", ") || "empty"}`);
-  lines.push(`Forms settings: ${state.allMounts ? "growing for the wall, the ceiling and the floor at once" : MOUNT_NAME[state.fMount].toLowerCase()}, evolution ${state.evo.pop} x ${state.evo.gens} generations, mutation ${pct(state.evo.mutation)}, seed ${state.evo.seed}, size ${state.fSize} m, material per piece ${state.fBudget} kg, rule ${state.fRule}; material choice: ${state.matPick === "auto" ? "best of the ticked materials" : E.FELTS[state.matPick].name}`);
+  lines.push(`Forms settings: ${state.allMounts ? "growing a wall, a freestanding module and a ceiling piece at once" : MOUNT_NAME[state.fMount].toLowerCase()}, evolution ${state.evo.pop} x ${state.evo.gens} generations, mutation ${pct(state.evo.mutation)}, seed ${state.evo.seed}, size ${state.fSize} m, material per piece ${state.fBudget} kg, rule ${state.fRule}; material choice: ${state.matPick === "auto" ? "best of the ticked materials" : E.FELTS[state.matPick].name}`);
   for (const f of state.forms) lines.push(`- ${f.kind === "surface" ? "Surface texture as a freestanding screen" : "Free form"} "${f.name}"${f.id === state.formSel ? " (selected)" : ""}: ${f.mount}, ${describeOf(f)} ${E.FELTS[f.material].name}, ${fix(f.mass, 1)} kg; absorption ${f.area.map((a) => fix(a, 2)).join("/")} m2 at 250/500/1000 Hz; ${fix(f.perKg, 2)} m2 per kg${f.stance ? `; freestanding on ${stanceText(f)}, tips at ${fix(f.stance.angle, 0)} degrees (${f.stance.ok ? "stable" : "unstable"})` : ""}${f.baseline ? `; flat panel with the same kg: ${f.baseline.map((a) => fix(a, 2)).join("/")} m2` : ""}`);
   for (const f of state.forms) {
     if (f.cutPlan) lines.push(`  "${f.name}" cut-sheet: ${f.cutPlan.flaps} flaps, ${fix(f.cutPlan.cutLength, 1)} m of cuts, ${Math.round(f.cutPlan.t * 1000)} mm felt, ${f.cutPlan.side ? "side" : "top"} hinges, flaps close ${pct(f.cutPlan.droop)} under their weight`);
     if (f.skin) lines.push(`  "${f.name}" has a speech skin of ${f.skinCount} felt tufts`);
     if (state.families[f.id]) lines.push(`  "${f.name}" has a family of ${state.families[f.id].ids.length} variants (±${Math.round(state.families[f.id].elasticity * 100)}%)`);
   }
-  if (state.ws === "atlas" && state.atlas.rows) lines.push(`Structures comparison (${MOUNT_NAME[state.atlas.mount]}, ${E.FELTS[state.atlas.material].name}, neutral genomes, m2 per piece weighted for the target): ${atlasRows().map((r) => `${r.name} ${fix(r.score, 2)}${r.bs > 1e-4 ? ` (${fix(r.score / r.bs, 1)}x panel)` : ""}`).join("; ")}${state.atlas.sel ? `; selected ${state.atlas.sel}` : ""}`);
+  if (state.ws === "atlas") lines.push(`Structures page: a gallery of every generator grown for a wall, freestanding and from the ceiling (${state.atlas.mode === "middle" ? "every value in the middle" : "random generations, seed " + state.atlas.seed}), felt ${E.FELTS[state.atlas.felt].name}; mechanisms: ${galleryKeys().map((k) => `${isSurf(k) ? E.FAMILY[k].name : G.RULES[k].name} (${MECH[k] ? MECH[k][0] : ""})`).join(", ")}`);
   const lsp = curSpace(), lay = lsp && roomLayout(lsp);
   if (lay && lay.spots.length) lines.push(`Room layout ${"ABC"[lsp.layoutOpt || 0]} in ${lsp.name}: ${lay.spots.length} pieces placed from the probability map, ${fix(lay.gain, 2)}x better spots than an even spread`);
   if (state.ranking) lines.push(`Material ranking for ${E.FAMILY[state.ranking.family].name}: ${state.ranking.rows.map((r) => `${E.FELTS[r.params.porous].name} ${pct(r.score)}`).join(", ")}`);
@@ -3099,12 +3100,12 @@ const TOUR = [
   { ws: "grow", tool: "all", sel: "#room-zone", title: "2. See the room", text: "The room in 3D, its echo now and with what you placed, and the recommended echo for talking. Drag to orbit." },
   { ws: "grow", tool: "all", sel: "#opt-target", title: "3. Grow for this room", text: "“This room's needs” weights each pitch by how much the room rings too long, so the structures answer the environment. Pick the material next to it." },
   { ws: "grow", tool: "all", sel: "#tools", title: "4. Generators", text: "Surface textures (as freestanding screens), natural growth, felt-sheet hybrids and the sound-grown membrane. The room view tools are at the bottom." },
-  { ws: "grow", tool: "all", sel: "#opt-mount", title: "5. Floor, wall or ceiling", text: "Grow for one place, or All 3 to get a seed for the wall, the ceiling and the floor in one run. Floor pieces must lean 10° before toppling." },
+  { ws: "grow", tool: "all", sel: "#opt-mount", title: "5. Wall, freestanding or ceiling", text: "A wall is a double-sided partition, on the ground or hung; freestanding is a single module; ceiling pieces hang overhead. All 3 grows one of each. Pieces on the ground must lean 10° before toppling." },
   { ws: "grow", tool: "voronoi", sel: ".graph", title: "6. The graph", text: "Like Grasshopper: every value of a generator is a slider. Drag one and the piece regrows; lock what you like, then Test or Evolve within your ranges." },
   { ws: "grow", tool: "all", sel: "#panel-absorbers", title: "7. Place in the room", text: "Open a grown structure and press “Place in this room”: the lab adds as many pieces as the room needs and the 3D view and echo update." },
   { ws: "grow", tool: "membrane", sel: "#panel-sound", title: "8. Sound draws the form", text: "After Biothing's Genware: the room's own resonances (or a recording) can grow a membrane, or cut the flaps of an interference cut-sheet." },
   { ws: "grow", tool: "all", sel: "#room-map-card", title: "9. Where pieces go", text: "A map of the room shows where pieces help most. Layouts A, B and C are drawn from it by chance: proposals to choose from." },
-  { ws: "atlas", sel: "#tab-atlas", title: "10. Compare structures", text: "Every structure and surface measured the same way, ranked for what you want to quiet, with why each one absorbs." },
+  { ws: "atlas", sel: "#tab-atlas", title: "10. Compare structures", text: "A gallery of every generator grown for a wall, freestanding and from the ceiling. Click one to open it in the Studio." },
   { ws: "materials", sel: "#panel-materials", title: "11. Materials library", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
   { ws: "grow", tool: "all", sel: "#panel-guide", title: "12. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
 ];

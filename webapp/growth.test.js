@@ -23,21 +23,22 @@ const parts = [{ a: [0, 0, 0], b: [1, 2, 3], r: 0.1 }, { c: [1, 1, 1], u: [0.2, 
 const back = G.unpack(G.pack(parts));
 close(back[1].t, 0.03, 1e-6, "pack keeps sheets"); close(back[0].b[2], 3, 1e-6, "pack keeps capsules");
 
-// Every rule grows inside its envelope: on a wall, hanging from the ceiling and standing.
-for (const rule of Object.keys(G.RULES)) for (const mount of ["hanging", "standing", "wall"]) {
+// Every rule grows inside its envelope: as a partition (on the ground or hung), freestanding, from the ceiling.
+for (const rule of Object.keys(G.RULES)) for (const mount of ["hanging", "standing", "wall", "wallhung"]) {
   const genes = Array.from({ length: G.geneCount(rule) }, (_, i) => (i * 0.37) % 1);
   const prims = G.grow(rule, genes, { mount, size: 1.2 });
   const { min, max } = G.bounds(prims), env = G.envelope(1.2, mount), R = G.RULES[rule];
   assert.ok(prims.length >= 3 && prims.length < 80000, `${rule} ${mount} part count ${prims.length}`);
   const slack = R.group === "sound" ? 0.5 : R.lab ? 0.1 : R.group === "hybrid" || mount !== "hanging" ? 0.081 : 1e-6; // feet reach out; sheets keep their real thickness when scaled
-  assert.ok(max[0] - min[0] <= env.width + slack && max[2] - min[2] <= env.height + slack + (R.lab && mount === "hanging" ? 0.3 : 0), `${rule} ${mount} fits`);
-  if (mount === "hanging") close(max[2], 0, slack, `${rule} hangs from the ceiling`);
-  else if (mount === "standing") close(min[2], 0, slack, `${rule} stands on the floor`);
-  else assert.ok(min[1] >= -0.02 && max[1] <= env.depth + 0.12 && min[2] >= -0.05, `${rule} sits on the wall (${min[1].toFixed(2)}..${max[1].toFixed(2)} m deep)`);
+  assert.ok(max[0] - min[0] <= env.width + slack && max[2] - min[2] <= env.height + slack + (R.lab || G.isWall(mount) ? 0.35 : 0), `${rule} ${mount} fits`);
+  if (G.hung(mount)) close(max[2], 0, slack + (G.isWall(mount) ? 0.01 : 0), `${rule} ${mount} hangs from the ceiling`);
+  else close(min[2], 0, slack, `${rule} ${mount} stands on the floor`);
+  if (G.isWall(mount) && !R.group) assert.ok(max[1] - min[1] <= 2 * env.depth + 0.6, `${rule} partition stays thin (${(max[1] - min[1]).toFixed(2)} m)`);
 }
-// Wall pieces are tested against the wall; a wall evaluation runs.
+// A partition on the ground must stand; a hung one has no stance.
 const wall = G.evaluate({ rule: "voronoi", genes: Array.from({ length: G.geneCount("voronoi") }, () => 0.5), mount: "wall", size: 1.2, material: { sigma: 20000, density: 60 }, budget: 5 });
-assert.ok(wall.score > 0 && !wall.stance && wall.holdfast, "wall module evaluates");
+const wallHung = G.evaluate({ rule: "voronoi", genes: Array.from({ length: G.geneCount("voronoi") }, () => 0.5), mount: "wallhung", size: 1.2, material: { sigma: 20000, density: 60 }, budget: 5 });
+assert.ok(wall.score > 0 && wall.stance && !wallHung.stance && wallHung.score > 0 && wallHung.holdfast, "partitions evaluate");
 // Lattices: struts and shells are print (structure); only their felt infill absorbs.
 const lat = (rule, fill) => { const g = Array.from({ length: G.geneCount(rule) }, () => 0.5); g[7] = fill; return G.evaluate({ rule, genes: g, mount: "wall", size: 1, material: { sigma: 20000, density: 60 }, budget: 5, structureDensity: 1240 }); };
 const empty0 = lat("strutlattice", 0), filled = lat("strutlattice", 1);
