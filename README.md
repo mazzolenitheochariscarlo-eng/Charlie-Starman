@@ -84,6 +84,14 @@ one-person module mass, flat-pack transport and reuse across many events.
   slab, as a heat-formed felt shell with holes) and agent fibres (a flocking swarm whose trails become
   a mat of soft cords with hooked tufts). Printed struts and shells barely absorb (their gaps are far
   too big to rub the air), so lattices carry felt; every form also exports a 1:1 front drawing (SVG).
+- **Real, downloadable models**: every form downloads as a ZIP holding a GLB (with colours, for
+  Blender, Rhino or any glTF viewer), STL files in millimetres (all parts, soft parts only, structure
+  only, for printing, cutting or milling), an OBJ with materials, cut files, a 1:1 front drawing and a
+  README with size, materials, weights, stability and absorption. Every part is a closed solid: felt
+  sheets keep their thickness, rods are capped tubes, shells (minimal surfaces, bioforms) are thickened
+  into two skins joined along their rims, and parts that would float loose are tied to the body with
+  thin threads (shown in the holdfast). Downloads and previews regrow the form at higher detail from
+  its genome; the sound simulation uses the standard detail.
 - **Structures** (third tab): a gallery of every generator grown three ways (as a wall on the ground or
   hung, as a freestanding module, as a ceiling piece), with middle values or new random generations.
   Clicking a picture opens that exact generation in the Studio's graph.

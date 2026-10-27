@@ -921,6 +921,8 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
   // Places: "standing" a single freestanding module, "hanging" a ceiling piece, "wall" a double-sided
   // partition standing on the ground, "wallhung" the same partition hung from the ceiling.
   const onGround = (m) => m === "standing" || m === "wall", hung = (m) => m === "hanging" || m === "wallhung", isWall = (m) => m === "wall" || m === "wallhung";
+  // Detail: 1 for simulation, 2 for previews, 3 for downloads (finer meshes, more parts, same genome).
+  let DETAIL = 1;
   const simMount = (m) => (m === "wall" ? "standing" : m === "wallhung" ? "hanging" : m);
   // Apply an affine point map to every part (sheets: centre and edge vectors; triangles: corners).
   function mapParts(parts, fn) {
@@ -1185,7 +1187,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
         const curve = planCurve(plan, curv, L), at = (Fm, s2, z) => sampleField(Fm, nx, nz, (s2 / L + 0.5), z / H);
         const makeTiles = (Fm) => {
           const tiles = [];
-          for (let a = 0; a < 2600 && tiles.length < 700; a++) {
+          for (let a = 0; a < 2600 * DETAIL && tiles.length < 700 * DETAIL; a++) {
             const m = rMax * 0.6, s2 = (rand() - 0.5) * (L - 2 * m), z = 0.06 + m + rand() * (H - 0.08 - 2 * m), f = Math.pow(Math.max(0, Math.min(1, at(Fm, s2, z))), gamma);
             const r = lerp(rMax, rMin, f) * (1 + rhythmGain * strength * 0.4 * Math.sin((2 * Math.PI * z) / period));
             if (tiles.some((o) => Math.hypot(o.s - s2, o.z - z) < (o.r + r) / 2)) continue;
@@ -1442,6 +1444,11 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     { f: (X, Y, Z) => Math.cos(X) + Math.cos(Y) + Math.cos(Z), max: 3 },
     { f: (X, Y, Z) => Math.sin(X) * Math.sin(Y) * Math.sin(Z) + Math.sin(X) * Math.cos(Y) * Math.cos(Z) + Math.cos(X) * Math.sin(Y) * Math.cos(Z) + Math.cos(X) * Math.cos(Y) * Math.sin(Z), max: 1.42 },
   ];
+  // Turn a triangle so its normal points from the inside (value < 0) to the outside.
+  function orient(tr, ins, outs, cp) {
+    const mean = (ids) => mul(ids.reduce((acc, q) => add(acc, cp[q]), [0, 0, 0]), 1 / ids.length), g = sub(mean(outs), mean(ins));
+    return dot(cross(sub(tr[1], tr[0]), sub(tr[2], tr[0])), g) < 0 ? [tr[0], tr[2], tr[1]] : tr;
+  }
   // Marching tetrahedra over a grid: triangles of the surface value(x, y, z) = 0.
   function isoTriangles(value, x0, y0, z0, hx, hy, hz, nx, ny, nz, keepTri) {
     const V = new Float32Array((nx + 1) * (ny + 1) * (nz + 1)), id = (i, j, k) => i + (nx + 1) * (j + (ny + 1) * k), P = (i, j, k) => [x0 + i * hx, y0 + j * hy, z0 + k * hz];
@@ -1458,10 +1465,10 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
         if (!ins.length || !outs.length) continue;
         if (ins.length === 1 || outs.length === 1) {
           const lone = ins.length === 1 ? ins[0] : outs[0], rest = ins.length === 1 ? outs : ins;
-          out.push(rest.map((q) => cut(cp[lone], cv[lone], cp[q], cv[q])));
+          out.push(orient(rest.map((q) => cut(cp[lone], cv[lone], cp[q], cv[q])), ins, outs, cp));
         } else {
           const [a, b] = ins, [c, d] = outs, p1 = cut(cp[a], cv[a], cp[c], cv[c]), p2 = cut(cp[a], cv[a], cp[d], cv[d]), p3 = cut(cp[b], cv[b], cp[d], cv[d]), p4 = cut(cp[b], cv[b], cp[c], cv[c]);
-          out.push([p1, p2, p3], [p1, p3, p4]);
+          out.push(orient([p1, p2, p3], ins, outs, cp), orient([p1, p3, p4], ins, outs, cp));
         }
       }
     }
@@ -1532,10 +1539,16 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
           if (centres.some((o) => o !== C && Math.hypot(o[0] - x, o[1] - z) < Math.hypot(C[0] - x, C[1] - z))) continue;
           const L = lerp(Lc, Le, fr), w = L * ratio, ang = ((lerp(oLo, oHi, f(x, z)) * Math.PI) / 180), dl = Math.hypot(x - C[0], z - C[1]) || 1;
           const dir = [(x - C[0]) / dl, 0, (z - C[1]) / dl], side = [dir[2], 0, -dir[0]], Y = [0, 1, 0];
-          const e1 = add(mul(dir, Math.cos(ang)), mul(Y, Math.sin(ang))), a2 = Math.min(Math.PI * 0.95, ang + curl), e2 = add(mul(dir, Math.cos(a2)), mul(Y, Math.sin(a2)));
-          const p0 = [x, t, z], p1 = add(p0, mul(e1, L / 2));
-          parts.push({ c: add(p0, mul(e1, L / 4)), u: mul(e1, L / 4), v: mul(side, w / 2), t });
-          parts.push({ c: add(p1, mul(e2, L / 4)), u: mul(e2, L / 4), v: mul(side, w * 0.3), t });
+          // a petal bends from its opening angle by the curl, in segments that taper to a tip
+          const segs = 2 * DETAIL;
+          let p0 = [x, t, z];
+          for (let k = 0; k < segs; k++) {
+            const a2 = Math.min(Math.PI * 0.95, ang + (curl * k) / Math.max(1, segs - 1)), e = add(mul(dir, Math.cos(a2)), mul(Y, Math.sin(a2))), ls = L / segs;
+            const wk = w * (1 - 0.7 * Math.pow((k + 0.5) / segs, 1.5));
+            parts.push({ c: add(p0, mul(e, ls / 2)), u: mul(e, ls / 2), v: mul(side, wk / 2), t });
+            p0 = add(p0, mul(e, ls));
+          }
+          const e1 = add(mul(dir, Math.cos(ang)), mul(Y, Math.sin(ang)));
           depthMax[0] = Math.max(depthMax[0], L * Math.sin(ang));
         }
         if (v(9) === 1) parts.push({ c: [0, t / 2, Hm / 2], u: [W / 2, 0, 0], v: [0, 0, Hm / 2], t });
@@ -1615,7 +1628,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
         };
         const inside = (p) => { const z = p[2], u = z / H, rot = twist * u, x = p[0] * Math.cos(rot) + p[1] * Math.sin(rot), y = -p[0] * Math.sin(rot) + p[1] * Math.cos(rot); return z >= -1e-6 && z <= H + 1e-6 && Math.max(Math.abs(x), Math.abs(y)) <= radius(z) + 1e-6; };
         let cell = a, n = 0;
-        for (let it = 0; it < 4; it++) { n = Math.ceil(W / cell) ** 2 * Math.ceil(H / cell); if (n * UNIT[Math.min(3, v(1))].length * 0.35 < 14000) break; cell *= 1.25; }
+        for (let it = 0; it < 4; it++) { n = Math.ceil(W / cell) ** 2 * Math.ceil(H / cell); if (n * UNIT[Math.min(3, v(1))].length * 0.35 < 14000 * DETAIL ** 1.5) break; cell *= 1.25; }
         const nu = Math.ceil(W / cell), nw = Math.ceil(H / cell), map = (u, vv, w) => [-W / 2 + (u / nu) * W, -W / 2 + (vv / nu) * W, (w / nw) * H];
         const parts = latticeStruts(Math.min(3, v(1)), nu, nu, nw, map, inside, () => v(3));
         const balls = [];
@@ -1644,7 +1657,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
       xs = warp1D(W, (u) => lerp(cHi, cLo, col(u)) * grow); zs = warp1D(Hm, (w) => lerp(cHi, cLo, row(w)) * grow);
       nv = Math.max(1, Math.round(D / ((cLo + cHi) / 2 / grow)));
       const cells = (xs.length - 1) * (zs.length - 1) * nv;
-      if (surface ? cells < 2500 : cells * (v(0) === 4 ? 6 : UNIT[v(0)].length) * 0.4 < 12000) break;
+      if (surface ? cells < 2500 * DETAIL ** 1.5 : cells * (v(0) === 4 ? 6 : UNIT[v(0)].length) * 0.4 < 12000 * DETAIL ** 1.5) break;
       grow *= 1.2;
     }
     const nu = xs.length - 1, nw = zs.length - 1, Dsurf = (x, z) => D * (1 - wave * (1 - f(x, z)));
@@ -1652,7 +1665,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     let parts;
     if (!surface) parts = latticeStruts(v(0), nu, nv, nw, map, null, (p) => lerp(v(3), Math.max(v(3), v(4)), f(p[0], p[2])));
     else {
-      const T = TPMS[v(0)], tLo = v(3), tHi = Math.max(v(3), v(4)), cell = (cLo + cHi) / 2 / grow, h = Math.max(cLo / grow / 4, Math.cbrt((W * Hm * D) / 7000));
+      const T = TPMS[v(0)], tLo = v(3), tHi = Math.max(v(3), v(4)), cell = (cLo + cHi) / 2 / grow, h = Math.max(cLo / grow / (3 + DETAIL), Math.cbrt((W * Hm * D) / (7000 * DETAIL ** 2)));
       const gx = Math.ceil(W / h), gy = Math.max(2, Math.ceil(D / h)), gz = Math.ceil(Hm / h);
       const val = (x, y, z) => { const ds = Dsurf(x, z); return T.f(2 * Math.PI * invWarp(xs, x + W / 2), (2 * Math.PI * nv * y) / Math.max(ds, 1e-3), 2 * Math.PI * invWarp(zs, z)); };
       const tris = isoTriangles(val, -W / 2, 0, 0, W / gx, D / gy, Hm / gz, gx, gy, gz, (tr) => { const c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); return c[1] <= Dsurf(c[0], c[2]) + 1e-6; });
@@ -1683,7 +1696,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
       const v = (i) => paramValue("cellular", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(5)), rand = rng(seedOf(g) + 5);
       const rule = v(0), D = Math.min(ctx.env.depth || 0.3, v(6)), style = v(7);
       let a = v(1);
-      while ((W / a) * (Hm / a) * (D / a) > 40000) a *= 1.15;
+      while ((W / a) * (Hm / a) * (D / a) > 40000 * DETAIL) a *= 1.15;
       const nx = Math.max(2, Math.round(W / a)), ny = Math.max(2, Math.round(D / a)), nz = Math.max(2, Math.round(Hm / a)), N = nx * ny * nz;
       const id = (i, j, k) => i + nx * (j + ny * k), born = new Int16Array(N).fill(-1), pos = (i, j, k) => [-W / 2 + (i + 0.5) * (W / nx), (j + 0.5) * (D / ny), (k + 0.5) * (Hm / nz)];
       const fCell = new Float32Array(N);
@@ -1751,10 +1764,10 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
         x = bx; y = Math.max(-D / 3, Math.min(D / 3, y + (rand() - 0.5) * D * 0.4 * flow));
         blobs.push([x, isWall(mount) ? Math.max(-D / 4, Math.min(D / 4, y)) : y, z, R0 * (0.6 + 0.6 * rand())]);
       }
-      const k2 = 1 / (melt * melt), h0 = Math.max(0.03, Math.cbrt((W * (isWall(mount) ? env.depth : W) * H) / 22000));
+      const k2 = 1 / (melt * melt), h0 = Math.max(0.03 / DETAIL, Math.cbrt((W * (isWall(mount) ? env.depth : W) * H) / (22000 * DETAIL ** 2)));
       for (const b of blobs) b[3] = Math.max(b[3], (2 * h0) / (0.83 * melt)); // never smaller than the mesh can see
       const val = (px, py, pz) => { let s2 = 0; for (const [bx, by, bz, r] of blobs) s2 += Math.exp((-k2 * ((px - bx) ** 2 + (py - by) ** 2 + (pz - bz) ** 2)) / (r * r)); return 0.5 - s2; };
-      const y0 = -D / 2, h = Math.max(0.03, Math.cbrt((W * D * H) / 22000)), gx = Math.ceil(W / h), gy = Math.max(2, Math.ceil(D / h)), gz = Math.ceil(H / h);
+      const y0 = -D / 2, h = h0, gx = Math.ceil(W / h), gy = Math.max(2, Math.ceil(D / h)), gz = Math.ceil(H / h);
       let tris = isoTriangles(val, -W / 2, y0, 0, W / gx, D / gy, H / gz, gx, gy, gz);
       // holes: random points on the surface, open widest where the field is strong
       const holes = [];
@@ -1782,7 +1795,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
       const v = (i) => paramValue("swarm", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(12)), rand = rng(seedOf(g) + 31);
       const D = Math.min(ctx.env.depth || 0.3, v(7)), r = v(8), printed = v(11) === 1, a0 = (v(2) * Math.PI) / 180, base = [Math.cos(a0), Math.sin(a0)];
       let nA = v(0), steps = v(1);
-      while (nA * steps > 14000) { nA = Math.round(nA * 0.9); steps = Math.round(steps * 0.95); }
+      while (nA * steps > 14000 * DETAIL) { nA = Math.round(nA * 0.9); steps = Math.round(steps * 0.95); }
       const stepLen = Math.max(0.012, Math.min(W, Hm) / 60), R = 0.08, parts = [], extra = printed ? { structure: true } : {};
       const spawn = () => { const side = rand(); return side < 0.5 ? { x: -W / 2 + rand() * W, z: base[1] > 0 ? 0.001 : Hm - 0.001 } : { x: base[0] > 0 ? -W / 2 + 0.001 : W / 2 - 0.001, z: rand() * Hm }; };
       const agents = Array.from({ length: nA }, () => ({ ...{ x: -W / 2 + rand() * W, z: rand() * Hm }, d: [...base], ph: rand() * 6.283, y: 0 }));
@@ -1839,7 +1852,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
       for (const P of pulls) { s2 += seg(a, b, n, P); s2 -= 0.9 * Math.exp((-((a - P[0]) ** 2 + (b - P[1]) ** 2 + (n + th * 0.6) ** 2)) / (r0 * r0 * 0.5)); }
       return 0.5 - s2;
     };
-    const h = Math.max(0.025, Math.cbrt((W * span * (L + 0.1)) / 22000)), ga = Math.ceil(W / h), gb = Math.ceil(span / h), gn = Math.ceil((L + 0.12) / h);
+    const h = Math.max(0.025 / DETAIL, Math.cbrt((W * span * (L + 0.1)) / (22000 * DETAIL ** 2))), ga = Math.ceil(W / h), gb = Math.ceil(span / h), gn = Math.ceil((L + 0.12) / h);
     let tris = isoTriangles(val, -W / 2, 0, -0.08, W / ga, span / gb, (L + 0.12) / gn, ga, gb, gn);
     const holes = [];
     for (let k = 0; k < v(4) && tris.length; k++) { const tr = tris[Math.floor(rand() * tris.length)], c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); holes.push([c, v(5) * (0.25 + 0.75 * f(c[0], c[1]))]); }
@@ -1941,7 +1954,71 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     } else out.label = footings(out, planCurve(0, 0, env.width), env.width, Hm + 0.1, 2, Math.max(0.2, env.depth), false);
     return out;
   }
+  // A real object holds together: find groups of parts that touch nothing else (felt balls in a lattice,
+  // islands of a shell, petals off the backing) and tie each to the main body with a thin thread or pin.
+  function tieUp(parts) {
+    const n = parts.length;
+    if (n < 2) return parts;
+    const up = Int32Array.from({ length: n }, (_, i) => i), find = (i) => { while (up[i] !== i) { up[i] = up[up[i]]; i = up[i]; } return i; };
+    const S = [], CELL = 0.03, key = (x, y, z) => ((Math.floor(x / CELL) * 73856093) ^ (Math.floor(y / CELL) * 19349663) ^ (Math.floor(z / CELL) * 83492791)) >>> 0;
+    const addS = (q, r, i) => S.push([q[0], q[1], q[2], r, i]);
+    // triangles of one mesh hold together through their shared corners
+    const vkey = (q) => ((Math.round(q[0] * 2e4) * 73856093) ^ (Math.round(q[1] * 2e4) * 19349663) ^ (Math.round(q[2] * 2e4) * 83492791)) >>> 0, corner = new Map();
+    let triSeen = 0;
+    parts.forEach((p, i) => {
+      if (isTri(p)) {
+        for (const q of p.tri) { const k = vkey(q), o = corner.get(k); if (o === undefined) corner.set(k, i); else { const a = find(o), b = find(i); if (a !== b) up[a] = b; } }
+        if (triSeen++ % 8 === 0) addS(p.tri[0], p.t / 2 + 0.01, i); // a few samples to meet other parts
+        return;
+      }
+      if (isSheet(p)) {
+        const nu = Math.min(40, Math.max(1, Math.ceil((Math.hypot(...p.u) * 2) / 0.025))), nv = Math.min(40, Math.max(1, Math.ceil((Math.hypot(...p.v) * 2) / 0.025)));
+        for (let a = 0; a <= nu; a++) for (let b = 0; b <= nv; b++) addS(add(p.c, add(mul(p.u, (2 * a) / nu - 1), mul(p.v, (2 * b) / nv - 1))), p.t / 2, i);
+        return;
+      }
+      const L = Math.hypot(...sub(p.b, p.a)), m = Math.min(60, Math.max(1, Math.ceil(L / 0.025)));
+      for (let k = 0; k <= m; k++) addS(add(p.a, mul(sub(p.b, p.a), k / m)), p.r, i);
+    });
+    const grid = new Map();
+    S.forEach((s2, j) => { const k = key(s2[0], s2[1], s2[2]); let l = grid.get(k); if (!l) grid.set(k, (l = [])); l.push(j); });
+    const near = (s2, fn) => {
+      const cx = Math.floor(s2[0] / CELL), cy = Math.floor(s2[1] / CELL), cz = Math.floor(s2[2] / CELL);
+      for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const l = grid.get((((cx + dx) * 73856093) ^ ((cy + dy) * 19349663) ^ ((cz + dz) * 83492791)) >>> 0);
+        if (l) for (const j of l) fn(j);
+      }
+    };
+    for (const s2 of S) near(s2, (j) => {
+      const o = S[j];
+      if (o[4] === s2[4] || find(o[4]) === find(s2[4])) return;
+      if (Math.hypot(o[0] - s2[0], o[1] - s2[1], o[2] - s2[2]) <= s2[3] + o[3] + 0.006) up[find(o[4])] = find(s2[4]);
+    });
+    const count = new Map();
+    for (const s2 of S) { const r = find(s2[4]); count.set(r, (count.get(r) || 0) + 1); }
+    if (count.size < 2) return parts;
+    const main = [...count.entries()].sort((a, b) => b[1] - a[1])[0][0], mainS = S.filter((s2) => find(s2[4]) === main);
+    const groups = new Map();
+    for (const s2 of S) { const r = find(s2[4]); if (r !== main) { let l = groups.get(r); if (!l) groups.set(r, (l = [])); l.push(s2); } }
+    let ties = 0;
+    for (const list of groups.values()) {
+      // the closest pair between this group and the main body (sampled)
+      let best = null, bd = Infinity;
+      const pick = mainS.length > 3000 ? mainS.filter((_, k) => k % Math.ceil(mainS.length / 3000) === 0) : mainS, mine = list.length > 60 ? list.filter((_, k) => k % Math.ceil(list.length / 60) === 0) : list;
+      for (const a of mine) for (const b of pick) { const d = (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2; if (d < bd) { bd = d; best = [a, b]; } }
+      if (!best) continue;
+      parts.push({ a: best[0].slice(0, 3), b: best[1].slice(0, 3), r: 0.0015, structure: true });
+      ties++;
+    }
+    parts.ties = ties;
+    if (ties) parts.label = (parts.label ? parts.label + ", " : "") + `${ties} thread tie${ties === 1 ? "" : "s"} holding loose parts`;
+    return parts;
+  }
+
   function grow(rule, genes, opts) {
+    DETAIL = opts.detail || 1;
+    try { const parts = growRaw(rule, genes, opts); return opts.tie === false ? parts : tieUp(parts); } finally { DETAIL = 1; }
+  }
+  function growRaw(rule, genes, opts) {
     const env = envelope(opts.size, opts.mount), R = RULES[rule], ctx = { env, field: opts.field, material: opts.material, mount: opts.mount };
     if (R.direct) return R.build(genes, hung(opts.mount), ctx);
     if (isWall(opts.mount)) return toPartition(R.build(genes, true), env, opts.mount);
@@ -2984,10 +3061,18 @@ function setupDownloads(key, r) {
     saveFile("biothing-curves.csv", rows.map((x) => x.join(",")).join("\n"), e.target);
   };
 }
-async function saveFile(filename, data, btn) {
-  const label = btn.textContent;
-  try { await downloads.save({ filename, data }); btn.textContent = "Saved"; } catch (e) { btn.textContent = e && e.code === "declined" ? label : "Could not save"; }
-  setTimeout(() => { btn.textContent = label; }, 2500);
+async function saveFile(filename, data, btn, label = btn ? btn.textContent : "") {
+  try {
+    if (downloads) await downloads.save({ filename, data });
+    else {
+      // outside claude.ai (opened as a local file): an ordinary browser download
+      const url = URL.createObjectURL(data instanceof Blob ? data : new Blob([data]));
+      Object.assign(document.createElement("a"), { href: url, download: filename }).click();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    }
+    if (btn) btn.textContent = "Saved";
+  } catch (e) { if (btn) btn.textContent = e && e.code === "declined" ? label : e && e.code === "too_large" ? "Too large to save here" : "Could not save"; }
+  if (btn) setTimeout(() => { btn.textContent = label; }, 2500);
 }
 
 // ---------------------------------------------------------------- spaces ---
@@ -3157,15 +3242,19 @@ function makeViewer({ up = "z", hud = "Drag to orbit · scroll or pinch to zoom"
   if (!T3) { el.innerHTML = '<div class="fallback">The 3D view could not load here. Everything else still works.</div>'; v.draw = () => {}; return v; }
   const renderer = new T3.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-  renderer.setClearColor(0x0f1012);
+  renderer.setClearColor(0x16171a);
+  renderer.shadowMap.enabled = true; renderer.shadowMap.type = T3.PCFSoftShadowMap;
   el.appendChild(renderer.domElement);
   el.insertAdjacentHTML("beforeend", `<div class="hud">${hud}</div>`);
   const scene = new T3.Scene(), camera = new T3.PerspectiveCamera(40, 1, 0.01, 3000);
   if (up === "z") camera.up.set(0, 0, 1);
-  scene.add(new T3.HemisphereLight(0xffffff, 0x404048, 0.65));
-  const sun = new T3.DirectionalLight(0xffffff, 0.8);
+  scene.add(new T3.HemisphereLight(0xffffff, 0x50505a, 0.62));
+  const sun = new T3.DirectionalLight(0xfff6ea, 0.95);
   sun.position.set(up === "z" ? 3 : 2, up === "z" ? -2 : 3, up === "z" ? 6 : 4);
-  scene.add(sun);
+  sun.castShadow = up === "z"; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004; sun.shadow.radius = 3;
+  scene.add(sun, sun.target);
+  const fill = new T3.DirectionalLight(0xdfe8ff, 0.35); fill.position.set(-3, 3, 2); scene.add(fill);
+  v.shadowR = 3;
   v.root = new T3.Group();
   scene.add(v.root);
   let raf = 0;
@@ -3181,7 +3270,12 @@ function makeViewer({ up = "z", hud = "Drag to orbit · scroll or pinch to zoom"
       if (up === "z") camera.position.set(tx + o.dist * s * Math.cos(o.theta), ty + o.dist * s * Math.sin(o.theta), tz + o.dist * c);
       else camera.position.set(tx + o.dist * s * Math.sin(o.theta), ty + o.dist * c, tz + o.dist * s * Math.cos(o.theta));
       camera.lookAt(tx, ty, tz);
-      sun.position.copy(camera.position).add(new T3.Vector3(up === "z" ? 0 : 1, up === "z" ? 0 : 2, up === "z" ? 3 : 0));
+      if (up === "z") {
+        // a key light high above and to one side, so the pieces cast soft shadows on the floor
+        const R = v.shadowR, cam = sun.shadow.camera;
+        sun.position.set(tx + R * 0.9, ty - R * 0.7, tz + R * 2.2); sun.target.position.set(tx, ty, tz);
+        cam.left = cam.bottom = -R * 1.3; cam.right = cam.top = R * 1.3; cam.near = 0.05; cam.far = R * 6; cam.updateProjectionMatrix();
+      } else sun.position.copy(camera.position).add(new T3.Vector3(1, 2, 0));
       renderer.render(scene, camera);
     });
   };
@@ -3282,7 +3376,12 @@ const View3D = (() => {
       }
     }
   }
-  function rebuild() { v.clear(); buildRoom(space); buildAbsorbers(space); }
+  function rebuild() {
+    v.clear(); buildRoom(space); buildAbsorbers(space);
+    const { min, max } = space.info;
+    v.shadowR = Math.hypot(max[0] - min[0], max[1] - min[1]) * 0.6;
+    v.root.traverse((m) => { if (m.isMesh && m.material && m.material.opacity === 0.95) m.receiveShadow = true; });
+  }
   function frame(sp) {
     const { min, max } = sp.info;
     Object.assign(v.orbit, { theta: -0.9, phi: 1.05, target: [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 3],
@@ -3795,11 +3894,11 @@ function formsPropsPanel() {
       <dt>Per kg</dt><dd>${fix(f.perKg, 2)} m²</dd><dt>vs panel</dt><dd>${bs ? fix(f.score / bs, 1) + "×" : "measuring…"}</dd></dl>
     <div class="chips"><button class="chip" data-ask="Explain the ${esc(f.name)} form in simple words: why does it absorb sound this well or badly, and what would nature change?">Ask the guide</button>
       ${f.kind === "surface" ? "" : `<button class="chip" id="form-seed">${(state.seeds[seedKey(f.rule, f.mount)] || []).some((g) => g.join() === f.genes.join()) ? "In the seed library ✓" : `Add to ${MOUNT_NAME[f.mount].toLowerCase()} seeds`}</button>`}
-      <button class="chip" id="form-obj" ${downloads ? "" : "hidden"}>Export 3D (OBJ)</button><button class="chip" id="form-to-space">Place in this room</button></div>
+      <button class="chip" id="form-obj">Download 3D model (.zip)</button><button class="chip" id="form-to-space">Place in this room</button></div>
     ${f.kind === "surface" ? "" : `<h4>Grow further</h4>
       <p class="hint">A family keeps this form's nature but makes every piece different. A skin grows a second, finer structure on it from the speech sound.</p>
       <div class="formgrid"><label for="fam-el">Variation</label><select id="fam-el">${ELASTIC.map(([v, l]) => `<option value="${v}" ${v === state.famEl ? "selected" : ""}>${l} (±${Math.round(v * 100)}%)</option>`).join("")}</select></div>
-      <div class="chips"><button class="chip" id="form-family" ${state.fGrowing ? "disabled" : ""}>Grow 6 variants</button>${f.skin ? "" : `<button class="chip" id="form-skin" ${state.fGrowing ? "disabled" : ""}>Grow a speech skin on it</button>`}${f.cutPlan && downloads ? '<button class="chip" id="form-cut">Save cut file (SVG)</button>' : ""}${f.stripPlan && downloads ? '<button class="chip" id="form-strips">Save strip cut file (SVG)</button>' : ""}${downloads ? '<button class="chip" id="form-drawing">Save drawing (SVG)</button>' : ""}</div>`}</div></details>`;
+      <div class="chips"><button class="chip" id="form-family" ${state.fGrowing ? "disabled" : ""}>Grow 6 variants</button>${f.skin ? "" : `<button class="chip" id="form-skin" ${state.fGrowing ? "disabled" : ""}>Grow a speech skin on it</button>`}${f.cutPlan ? '<button class="chip" id="form-cut">Save cut file (SVG)</button>' : ""}${f.stripPlan ? '<button class="chip" id="form-strips">Save strip cut file (SVG)</button>' : ""}<button class="chip" id="form-drawing">Save drawing (SVG)</button></div>`}</div></details>`;
 }
 function formsLayersPanel() {
   const list = state.forms.slice().sort((a, b) => b.fitness - a.fitness);
@@ -3824,7 +3923,7 @@ function bindFormsDock() {
   $("#seeds-file").onchange = (e) => { loadSeeds(e.target.files[0]); e.target.value = ""; };
   const f = selForm();
   if (!f || gmode() !== "forms") return;
-  if ($("#form-obj")) $("#form-obj").onclick = (e) => saveFile(`biothing-${f.rule}-${f.id}.obj`, formOBJ(f), e.target);
+  if ($("#form-obj")) $("#form-obj").onclick = (e) => downloadModel(f, e.target);
   if ($("#fam-el")) $("#fam-el").onchange = (e) => { state.famEl = Number(e.target.value); };
   if ($("#form-family")) $("#form-family").onclick = () => growFamily(f, 6, state.famEl);
   if ($("#form-skin")) $("#form-skin").onclick = () => growSkinOn(f);
@@ -3915,12 +4014,46 @@ const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], add3 = (a, b) =>
 const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm3 = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
-// Instanced tubes, balls and sheets (and a mesh for shell triangles) for a form, optionally repeated at
+// A fibrous felt texture drawn once: short random fibres, used as colour variation and as a bump map.
+let FELT_TEX = null;
+function feltTexture() {
+  if (FELT_TEX || !T3) return FELT_TEX;
+  const cv = document.createElement("canvas"), ctx = cv.getContext("2d"), rnd = G.rng(4242);
+  cv.width = cv.height = 256;
+  ctx.fillStyle = "#e9e9e9"; ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 2600; i++) {
+    const x = rnd() * 256, y = rnd() * 256, a = rnd() * Math.PI * 2, l = 4 + rnd() * 14, g2 = 190 + Math.floor(rnd() * 65);
+    ctx.strokeStyle = `rgba(${g2},${g2},${g2},0.55)`; ctx.lineWidth = 0.6 + rnd() * 0.8;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x + Math.cos(a + 0.6) * l * 0.5, y + Math.sin(a + 0.6) * l * 0.5, x + Math.cos(a) * l, y + Math.sin(a) * l); ctx.stroke();
+  }
+  FELT_TEX = new T3.CanvasTexture(cv);
+  FELT_TEX.wrapS = FELT_TEX.wrapT = T3.RepeatWrapping;
+  FELT_TEX.repeat.set(2, 2);
+  return FELT_TEX;
+}
+// Shell triangles welded into one smooth mesh, with texture coordinates projected from the side.
+function shellGeometry(tris, place) {
+  const W = weld(tris), pos = new Float32Array(W.verts.length * place.length), nrm = new Float32Array(W.verts.length * place.length), uv = new Float32Array((W.verts.length / 3) * 2 * place.length), idx = [];
+  const nV = W.verts.length / 3;
+  place.forEach((T, k) => {
+    for (let i = 0; i < nV; i++) {
+      const w = T.pt([W.verts[3 * i], W.verts[3 * i + 1], W.verts[3 * i + 2]]), n = T.vec([W.nrm[3 * i], W.nrm[3 * i + 1], W.nrm[3 * i + 2]]), j = 3 * (k * nV + i);
+      pos[j] = w[0]; pos[j + 1] = w[1]; pos[j + 2] = w[2]; nrm[j] = n[0]; nrm[j + 1] = n[1]; nrm[j + 2] = n[2];
+      uv[2 * (k * nV + i)] = (W.verts[3 * i] + W.verts[3 * i + 1]) * 4; uv[2 * (k * nV + i) + 1] = W.verts[3 * i + 2] * 4;
+    }
+    for (const [f] of W.faces) idx.push(k * nV + f[0], k * nV + f[1], k * nV + f[2]);
+  });
+  const geo = new T3.BufferGeometry();
+  geo.setAttribute("position", new T3.BufferAttribute(pos, 3)); geo.setAttribute("normal", new T3.BufferAttribute(nrm, 3)); geo.setAttribute("uv", new T3.BufferAttribute(uv, 2));
+  geo.setIndex(nV * place.length > 65535 ? new T3.Uint32BufferAttribute(idx, 1) : new T3.Uint16BufferAttribute(idx, 1));
+  return geo;
+}
+// Instanced tubes, balls and sheets (and a smooth mesh for shells) for a form, optionally repeated at
 // several positions [x, y, z, turn about z] (Spaces).
 function formInstances(f, positions, parent) {
-  const parts = f.parts || primsOf(f.prims), o = new T3.Object3D(), up = new T3.Vector3(0, 1, 0);
-  const soft = new T3.MeshStandardMaterial({ color: SOFT_COLORS[f.material], roughness: 0.95, side: T3.DoubleSide });
-  const hard = new T3.MeshStandardMaterial({ color: HARD_COLORS[f.structureMat || structureKey()] || 0x8d9198, roughness: 0.7, side: T3.DoubleSide });
+  const parts = f.parts || primsOf(f.prims), o = new T3.Object3D(), up = new T3.Vector3(0, 1, 0), tex = feltTexture();
+  const soft = new T3.MeshStandardMaterial({ color: SOFT_COLORS[f.material], roughness: 1, side: T3.DoubleSide, map: tex, bumpMap: tex, bumpScale: 0.012 });
+  const hard = new T3.MeshStandardMaterial({ color: HARD_COLORS[f.structureMat || structureKey()] || 0x8d9198, roughness: 0.55, metalness: 0.05, side: T3.DoubleSide });
   const place = positions.map((pos) => { const c = Math.cos(pos[3] || 0), s2 = Math.sin(pos[3] || 0); return { pt: (q) => [q[0] * c - q[1] * s2 + pos[0], q[0] * s2 + q[1] * c + pos[1], q[2] + pos[2]], vec: (q) => [q[0] * c - q[1] * s2, q[0] * s2 + q[1] * c, q[2]] }; });
   for (const [mat, list] of [[soft, parts.filter((p) => !p.structure)], [hard, parts.filter((p) => p.structure)]]) {
     const tubes = [], balls = [], sheets = [], tris = [];
@@ -3958,28 +4091,31 @@ function formInstances(f, positions, parent) {
       }
       parent.add(inst);
     }
-    if (tris.length) {
-      const pos = new Float32Array(tris.length * place.length * 9);
-      let i = 0;
-      for (const T of place) for (const p of tris) for (const q of p.tri) { const w = T.pt(q); pos[i++] = w[0]; pos[i++] = w[1]; pos[i++] = w[2]; }
-      const geo = new T3.BufferGeometry();
-      geo.setAttribute("position", new T3.BufferAttribute(pos, 3));
-      geo.computeVertexNormals();
-      parent.add(new T3.Mesh(geo, mat));
-    }
+    if (tris.length) parent.add(new T3.Mesh(shellGeometry(tris, place), mat));
   }
+  parent.traverse((m) => { if (m.isMesh) { m.castShadow = true; m.receiveShadow = true; } });
 }
 
+// The preview of a grown form: regrown at higher detail from its genome (same form, finer mesh).
+function viewParts(f) {
+  if (f._view) return f._view;
+  if (f.kind === "surface" || f.skin || !G.RULES[f.rule] || !f.genes) return primsOf(f.prims);
+  try { const m = E.FELTS[f.material]; f._view = G.grow(f.rule, f.genes, { mount: f.mount, size: f.size, field: f.srcField || null, material: { sigma: m.sigma, density: m.density }, detail: 2 }); }
+  catch (err) { f._view = primsOf(f.prims); }
+  return f._view;
+}
 // 3D view of one form with its ceiling or floor, and a person for scale when it stands.
 const FormView = (() => {
   let v = null, shown = null, framed = "";
   function build(f) {
     v.clear();
-    formInstances(f, [[0, 0, 0]], v.root);
+    formInstances(f.parts ? f : { ...f, parts: viewParts(f) }, [[0, 0, 0]], v.root);
     const S = f.size, H = f.mount === "hanging" ? S : G.envelope(S, f.mount).height, grey = new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1 }), up = G.hung(f.mount);
     const slab = new T3.Mesh(new T3.BoxGeometry(S * 1.6, S * 1.6, 0.02), up ? new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1, transparent: true, opacity: 0.55 }) : grey);
     slab.position.set(0, 0, up ? 0.01 : -0.01);
+    slab.receiveShadow = true;
     v.root.add(slab);
+    v.shadowR = Math.max(S, H) * 1.1;
     if (G.onGround(f.mount)) {
       const body = new T3.MeshStandardMaterial({ color: 0x8d9198, roughness: 1 }), x = S / 2 + 0.45;
       const part = (geo, z) => { const m = new T3.Mesh(geo, body); m.rotation.x = Math.PI / 2; m.position.set(x, 0, z); v.root.add(m); };
@@ -4616,7 +4752,7 @@ function growOrder(rule, prims, mount) {
 }
 function labBuild(rule) {
   const genes = labGenes(rule), mat = materialOf(rule, genes), m = E.FELTS[mat], sKey = printKey(rule), job = labField(rule);
-  const prims = G.grow(rule, genes, { mount: state.fMount, size: state.fSize, field: job, material: { sigma: m.sigma, density: m.density } });
+  const prims = G.grow(rule, genes, { mount: state.fMount, size: state.fSize, field: job, material: { sigma: m.sigma, density: m.density }, detail: 2 });
   state.lab.preview = { id: "lab", rule, genes: genes.slice(), mount: state.fMount, size: state.fSize, material: mat, structureMat: sKey, parts: prims, all: prims, order: growOrder(rule, prims, state.fMount),
     ins: G.inspect(prims, m.density, E.RIGIDS[sKey].density, state.fMount), srcField: job, sourceLabel: job ? fieldNow().label : null, cutPlan: prims.cutPlan || null, stripPlan: prims.stripPlan || null, holdfast: prims.label };
 }
@@ -4712,7 +4848,7 @@ function labView(rule) {
     </div></div>
     <div class="card" id="lab-card"><div class="card-head"><h3>Live preview</h3><span class="hint" id="lab-stats"></span></div>
       <div id="fv-slot"></div>
-      <div class="row3d"><span class="muted" id="lab-desc"></span><span class="chips"><button class="chip" id="lab-play">Watch it grow</button></span></div>
+      <div class="row3d"><span class="muted" id="lab-desc"></span><span class="chips"><button class="chip" id="lab-play">Watch it grow</button><button class="chip" id="lab-download">Download 3D model (.zip)</button></span></div>
       <label class="growbar"><span class="muted">Growth</span><input type="range" id="lab-grow" min="0" max="1" step="0.01" value="${state.lab.grow}" aria-label="How much of the growth to show"></label>
       <div id="lab-test-out"></div></div>`;
   if (f) drawField($("#lab-field"), f, null, state.fSize, state.fMount === "hanging" ? state.fSize : G.envelope(state.fSize, state.fMount).height, "standing");
@@ -4744,6 +4880,7 @@ function labView(rule) {
   $("#lab-test").onclick = () => labTest(rule);
   $("#lab-evolve").onclick = growForms;
   $("#lab-play").onclick = playGrowth;
+  $("#lab-download").onclick = (e) => { const pv = state.lab.preview; if (pv) downloadModel({ ...pv, name: `${G.RULES[rule].name} (graph)`, area: state.lab.tested ? state.lab.tested.r.area : [0, 0, 0], mass: pv.ins.mass, stance: pv.ins.stance }, e.target); };
   $("#lab-grow").oninput = (e) => { cancelAnimationFrame(playRaf); state.lab.grow = Number(e.target.value); showPreview(); };
 }
 // A front view of a form at full size in millimetres, to trace, print or draw over.
@@ -4847,18 +4984,19 @@ function galleryForm(key, mount) {
     return surfPiece(r, structureKey(), 1.2, mount);
   }
   const genes = galleryGenes(key, G.geneCount(key));
-  const parts = G.grow(key, genes, { mount, size: 1.2, field: usesField(key) ? galleryField() : null, material: { sigma: m.sigma, density: m.density } });
+  const parts = G.grow(key, genes, { mount, size: 1.2, field: usesField(key) ? galleryField() : null, material: { sigma: m.sigma, density: m.density }, detail: 2 });
   return { rule: key, genes, mount, size: 1.2, parts, material: felt, structureMat: printKey(key) };
 }
 // A single off-screen renderer turns each generation into a still picture.
 const Thumbs = (() => {
-  let r = null, scene, cam, root;
+  let r = null, scene, cam, root, sun;
   function init() {
     r = new T3.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    r.shadowMap.enabled = true; r.shadowMap.type = T3.PCFSoftShadowMap;
     r.setPixelRatio(1); r.setSize(320, 260, false); r.setClearColor(0x2b2e34);
     scene = new T3.Scene(); cam = new T3.PerspectiveCamera(36, 320 / 260, 0.01, 100); cam.up.set(0, 0, 1);
     scene.add(new T3.HemisphereLight(0xffffff, 0x60606a, 1.05));
-    const sun = new T3.DirectionalLight(0xffffff, 0.9); sun.position.set(2, -3, 5); scene.add(sun);
+    sun = new T3.DirectionalLight(0xfff6ea, 0.95); sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024); sun.shadow.bias = -0.0005; scene.add(sun, sun.target);
     const fill = new T3.DirectionalLight(0xdde6ff, 0.45); fill.position.set(-3, 2, -1); scene.add(fill);
     root = new T3.Group(); scene.add(root);
   }
@@ -4871,7 +5009,9 @@ const Thumbs = (() => {
       formInstances(f, [[0, 0, 0]], root);
       const parts = f.parts || primsOf(f.prims), b = G.bounds(parts), c = [0, 1, 2].map((i) => (b.min[i] + b.max[i]) / 2), R = Math.max(0.3, Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]) / 2);
       const grey = new T3.MeshStandardMaterial({ color: 0x6a6e76, roughness: 1 });
-      const s2 = new T3.Mesh(new T3.BoxGeometry(R * 3, R * 3, 0.02), grey); s2.position.set(c[0], c[1], G.hung(f.mount) ? 0.012 : -0.012); root.add(s2);
+      const s2 = new T3.Mesh(new T3.BoxGeometry(R * 3, R * 3, 0.02), grey); s2.position.set(c[0], c[1], G.hung(f.mount) ? 0.012 : -0.012); s2.receiveShadow = true; root.add(s2);
+      sun.position.set(c[0] + R * 0.9, c[1] - R * 0.7, c[2] + R * 2.4); sun.target.position.set(c[0], c[1], c[2]);
+      Object.assign(sun.shadow.camera, { left: -R * 1.4, right: R * 1.4, top: R * 1.4, bottom: -R * 1.4, near: 0.05, far: R * 6 }); sun.shadow.camera.updateProjectionMatrix();
       const [th, ph] = f.mount === "hanging" ? [-0.9, 1.95] : f.mount === "wallhung" ? [-0.9, 1.7] : [-0.9, 1.22], d = R * 2.9;
       cam.position.set(c[0] + d * Math.sin(ph) * Math.cos(th), c[1] + d * Math.sin(ph) * Math.sin(th), c[2] + d * Math.cos(ph));
       cam.lookAt(c[0], c[1], c[2]);
@@ -4950,6 +5090,195 @@ function atlasPanel() {
   return `<details class="panel" open id="panel-atlas"><summary>Families</summary><div class="panel-body">
     ${Object.entries(GROUP_COLORS).map(([g, col]) => `<p><i class="dot" style="background:${col}"></i>${g}</p>`).join("")}
     <p class="hint">Use the toolbar on the left to show one family. Walls are double-sided partitions that join edge to edge, on feet or hung on cables; freestanding modules get their own holdfast; ceiling pieces hang overhead.</p></div></details>`;
+}
+
+// ---------------------------------------------------------------- models ---
+// Downloadable 3D models. Every part becomes a closed solid: sheets are boxes with their real
+// thickness, rods are tubes with end caps, balls are spheres, and shells (minimal surfaces, bioforms)
+// are thickened into two skins joined along their open rims. Packaged as a ZIP with GLB (colours, for
+// Blender, Rhino or any viewer), STL (millimetres, for printing or milling), OBJ, cut files and a README.
+function solidMeshes(parts) {
+  const groups = { felt: { pos: [], idx: [] }, structure: { pos: [], idx: [] }, feltShell: { pos: [], idx: [], nrm: [] }, structureShell: { pos: [], idx: [], nrm: [] } };
+  const box = (g, p) => {
+    const n = mul3(norm3(cross3(p.u, p.v)), p.t / 2), b = g.pos.length / 3;
+    for (const sn of [-1, 1]) for (const [su, sv] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) g.pos.push(...add3(add3(p.c, mul3(n, sn)), add3(mul3(p.u, su), mul3(p.v, sv))));
+    for (const f of [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5], [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]]) g.idx.push(b + f[0], b + f[1], b + f[2]);
+  };
+  const tube = (g, a, c, r, seg = 12) => {
+    const d = norm3(sub3(c, a)), u = Math.abs(d[2]) < 0.9 ? norm3(cross3(d, [0, 0, 1])) : norm3(cross3(d, [1, 0, 0])), w = cross3(d, u), b = g.pos.length / 3;
+    for (const e of [a, c]) for (let k = 0; k < seg; k++) { const t = (k / seg) * 2 * Math.PI; g.pos.push(...add3(e, add3(mul3(u, r * Math.cos(t)), mul3(w, r * Math.sin(t))))); }
+    g.pos.push(...a, ...c);
+    const ca = b + 2 * seg, cc = ca + 1;
+    for (let k = 0; k < seg; k++) { const k2 = (k + 1) % seg; g.idx.push(b + k, b + seg + k, b + seg + k2, b + k, b + seg + k2, b + k2, ca, b + k, b + k2, cc, b + seg + k2, b + seg + k); }
+  };
+  const ball = (g, c, r) => {
+    const b = g.pos.length / 3, nl = 8, nu = 12;
+    for (let i = 0; i <= nl; i++) for (let j = 0; j < nu; j++) { const th = (i / nl) * Math.PI, ph = (j / nu) * 2 * Math.PI; g.pos.push(c[0] + r * Math.sin(th) * Math.cos(ph), c[1] + r * Math.sin(th) * Math.sin(ph), c[2] + r * Math.cos(th)); }
+    for (let i = 0; i < nl; i++) for (let j = 0; j < nu; j++) { const j2 = (j + 1) % nu, A = b + i * nu + j, B = b + i * nu + j2, C = b + (i + 1) * nu + j2, D = b + (i + 1) * nu + j; g.idx.push(A, D, C, A, C, B); }
+  };
+  const shells = { felt: [], structure: [] };
+  for (const p of parts) {
+    const k = p.structure ? "structure" : "felt";
+    if (G.isTri(p)) shells[k].push(p);
+    else if (G.isSheet(p)) box(groups[k], p);
+    else if (Math.hypot(...sub3(p.b, p.a)) < 1e-6) ball(groups[k], p.a, p.r);
+    else tube(groups[k], p.a, p.b, p.r, p.r < 0.004 ? 6 : 12);
+  }
+  for (const k of ["felt", "structure"]) if (shells[k].length) thickShell(shells[k], groups[k + "Shell"]);
+  return groups;
+}
+// Weld a triangle soup, then offset it to both sides by half the shell thickness and close the rims.
+function thickShell(tris, g) {
+  const W = weld(tris), nV = W.verts.length / 3, off = new Float32Array(nV);
+  for (const [f, t] of W.faces) for (const v of f) off[v] = Math.max(off[v], t / 2);
+  const b = 0, out = [], inn = [];
+  for (let i = 0; i < nV; i++) {
+    const p = [W.verts[3 * i], W.verts[3 * i + 1], W.verts[3 * i + 2]], n = [W.nrm[3 * i], W.nrm[3 * i + 1], W.nrm[3 * i + 2]];
+    out.push(add3(p, mul3(n, off[i]))); inn.push(add3(p, mul3(n, -off[i])));
+  }
+  for (const q of out) { g.pos.push(...q); }
+  for (const q of inn) { g.pos.push(...q); }
+  for (let i = 0; i < nV; i++) g.nrm.push(W.nrm[3 * i], W.nrm[3 * i + 1], W.nrm[3 * i + 2]);
+  for (let i = 0; i < nV; i++) g.nrm.push(-W.nrm[3 * i], -W.nrm[3 * i + 1], -W.nrm[3 * i + 2]);
+  const edges = new Map();
+  for (const [f] of W.faces) {
+    g.idx.push(b + f[0], b + f[1], b + f[2], nV + f[0], nV + f[2], nV + f[1]);
+    for (let k = 0; k < 3; k++) { const a = f[k], c = f[(k + 1) % 3], key = a < c ? a + "," + c : c + "," + a; edges.set(key, edges.has(key) ? null : [a, c]); }
+  }
+  // rims: an edge used by one face only gets a wall between the two skins (normals there are approximate)
+  for (const e of edges.values()) if (e) { const [a, c] = e; g.idx.push(a, nV + a, nV + c, a, nV + c, c); }
+}
+function weld(tris) {
+  const map = new Map(), verts = [], faces = [], key = (q) => Math.round(q[0] * 2e4) + "," + Math.round(q[1] * 2e4) + "," + Math.round(q[2] * 2e4);
+  for (const p of tris) {
+    const f = p.tri.map((q) => { const k = key(q); let i = map.get(k); if (i === undefined) { i = verts.length / 3; map.set(k, i); verts.push(q[0], q[1], q[2]); } return i; });
+    if (f[0] !== f[1] && f[1] !== f[2] && f[0] !== f[2]) faces.push([f, p.t]);
+  }
+  const nrm = new Float32Array(verts.length);
+  for (const [f] of faces) {
+    const A = [verts[3 * f[0]], verts[3 * f[0] + 1], verts[3 * f[0] + 2]], B = [verts[3 * f[1]], verts[3 * f[1] + 1], verts[3 * f[1] + 2]], C = [verts[3 * f[2]], verts[3 * f[2] + 1], verts[3 * f[2] + 2]], n = cross3(sub3(B, A), sub3(C, A));
+    for (const v of f) { nrm[3 * v] += n[0]; nrm[3 * v + 1] += n[1]; nrm[3 * v + 2] += n[2]; }
+  }
+  for (let i = 0; i < nrm.length; i += 3) { const l = Math.hypot(nrm[i], nrm[i + 1], nrm[i + 2]) || 1; nrm[i] /= l; nrm[i + 1] /= l; nrm[i + 2] /= l; }
+  return { verts, faces, nrm };
+}
+const linear = (hexColor) => [16, 8, 0].map((sh) => { const c = ((hexColor >> sh) & 255) / 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); });
+// glTF 2.0 binary. Our models are z-up in metres; glTF is y-up, so the root node turns them.
+function toGLB(meshes) {
+  const json = { asset: { version: "2.0", generator: "Biothing Sound Lab" }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ name: "model", rotation: [-Math.SQRT1_2, 0, 0, Math.SQRT1_2], children: [] }], meshes: [], materials: [], accessors: [], bufferViews: [], buffers: [] };
+  const chunks = [];
+  let offset = 0;
+  const view = (arr, target) => { const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength), pad = (4 - (bytes.length % 4)) % 4; chunks.push(bytes, new Uint8Array(pad)); json.bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: bytes.length, target }); offset += bytes.length + pad; return json.bufferViews.length - 1; };
+  for (const m of meshes) {
+    if (!m.idx.length) continue;
+    const pos = Float32Array.from(m.pos), idx = Uint32Array.from(m.idx), min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < pos.length; i++) { min[i % 3] = Math.min(min[i % 3], pos[i]); max[i % 3] = Math.max(max[i % 3], pos[i]); }
+    json.accessors.push({ bufferView: view(pos, 34962), componentType: 5126, count: pos.length / 3, type: "VEC3", min, max });
+    const attributes = { POSITION: json.accessors.length - 1 };
+    if (m.nrm && m.nrm.length) { json.accessors.push({ bufferView: view(Float32Array.from(m.nrm), 34962), componentType: 5126, count: m.nrm.length / 3, type: "VEC3" }); attributes.NORMAL = json.accessors.length - 1; }
+    json.accessors.push({ bufferView: view(idx, 34963), componentType: 5125, count: idx.length, type: "SCALAR" });
+    json.materials.push({ name: m.material, pbrMetallicRoughness: { baseColorFactor: [...linear(m.color), 1], metallicFactor: 0, roughnessFactor: m.rough }, doubleSided: true });
+    json.meshes.push({ name: m.name, primitives: [{ attributes, indices: json.accessors.length - 1, material: json.materials.length - 1 }] });
+    json.nodes.push({ name: m.name, mesh: json.meshes.length - 1 });
+    json.nodes[0].children.push(json.nodes.length - 1);
+  }
+  json.buffers.push({ byteLength: offset });
+  let jtxt = JSON.stringify(json);
+  while (jtxt.length % 4) jtxt += " ";
+  const jb = new TextEncoder().encode(jtxt), total = 12 + 8 + jb.length + 8 + offset, out = new Uint8Array(total), dv = new DataView(out.buffer);
+  dv.setUint32(0, 0x46546c67, true); dv.setUint32(4, 2, true); dv.setUint32(8, total, true);
+  dv.setUint32(12, jb.length, true); dv.setUint32(16, 0x4e4f534a, true); out.set(jb, 20);
+  let o = 20 + jb.length;
+  dv.setUint32(o, offset, true); dv.setUint32(o + 4, 0x004e4942, true); o += 8;
+  for (const c of chunks) { out.set(c, o); o += c.length; }
+  return out;
+}
+// Binary STL in millimetres.
+function toSTL(meshes, label) {
+  const n = meshes.reduce((a, m) => a + m.idx.length / 3, 0), out = new Uint8Array(84 + 50 * n), dv = new DataView(out.buffer);
+  out.set(new TextEncoder().encode(("Biothing Sound Lab " + label).slice(0, 79)), 0);
+  dv.setUint32(80, n, true);
+  let o = 84;
+  for (const m of meshes) for (let i = 0; i < m.idx.length; i += 3) {
+    const P = [0, 1, 2].map((k) => [m.pos[3 * m.idx[i + k]] * 1000, m.pos[3 * m.idx[i + k] + 1] * 1000, m.pos[3 * m.idx[i + k] + 2] * 1000]), nn = norm3(cross3(sub3(P[1], P[0]), sub3(P[2], P[0])));
+    [...nn, ...P[0], ...P[1], ...P[2]].forEach((v, k) => dv.setFloat32(o + 4 * k, v, true));
+    o += 50;
+  }
+  return out;
+}
+function toOBJ(meshes, mtlName) {
+  const lines = [`# Biothing Sound Lab, metres, z up`, `mtllib ${mtlName}`];
+  let base = 1;
+  for (const m of meshes) {
+    if (!m.idx.length) continue;
+    lines.push(`o ${m.name}`, `usemtl ${m.material}`);
+    for (let i = 0; i < m.pos.length; i += 3) lines.push(`v ${m.pos[i].toFixed(5)} ${m.pos[i + 1].toFixed(5)} ${m.pos[i + 2].toFixed(5)}`);
+    for (let i = 0; i < m.idx.length; i += 3) lines.push(`f ${m.idx[i] + base} ${m.idx[i + 1] + base} ${m.idx[i + 2] + base}`);
+    base += m.pos.length / 3;
+  }
+  return lines.join("\n") + "\n";
+}
+// A ZIP archive (stored, no compression) of named files.
+const CRC = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; } return t; })();
+function crc32(b) { let c = 0xffffffff; for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+function zip(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name), data = typeof f.data === "string" ? enc.encode(f.data) : f.data, crc = crc32(data);
+    const h = new Uint8Array(30 + name.length), dv = new DataView(h.buffer);
+    dv.setUint32(0, 0x04034b50, true); dv.setUint16(4, 20, true); dv.setUint16(8, 0, true); dv.setUint32(14, crc, true); dv.setUint32(18, data.length, true); dv.setUint32(22, data.length, true); dv.setUint16(26, name.length, true);
+    h.set(name, 30);
+    const c = new Uint8Array(46 + name.length), dc = new DataView(c.buffer);
+    dc.setUint32(0, 0x02014b50, true); dc.setUint16(4, 20, true); dc.setUint16(6, 20, true); dc.setUint32(16, crc, true); dc.setUint32(20, data.length, true); dc.setUint32(24, data.length, true); dc.setUint16(28, name.length, true); dc.setUint32(42, offset, true);
+    c.set(name, 46);
+    parts.push(h, data); central.push(c); offset += h.length + data.length;
+  }
+  const size = central.reduce((a, c) => a + c.length, 0), end = new Uint8Array(22), de = new DataView(end.buffer);
+  de.setUint32(0, 0x06054b50, true); de.setUint16(8, files.length, true); de.setUint16(10, files.length, true); de.setUint32(12, size, true); de.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, end], { type: "application/zip" });
+}
+// The finest version of a form for download: regrown from its genome at full detail when possible.
+function fineParts(f) {
+  if (f.kind === "surface" || f.skin || !G.RULES[f.rule]) return primsOf(f.prims);
+  const m = E.FELTS[f.material];
+  return G.grow(f.rule, f.genes, { mount: f.mount, size: f.size, field: f.srcField || (usesField(f.rule) ? null : null), material: { sigma: m.sigma, density: m.density }, detail: 3 });
+}
+async function downloadModel(f, btn) {
+  const label = btn ? btn.textContent : "";
+  if (btn) { btn.textContent = "Building the model…"; btn.disabled = true; }
+  await new Promise((r) => setTimeout(r, 30));
+  try {
+    const parts = fineParts(f), g = solidMeshes(parts), soft = E.FELTS[f.material], hard = E.RIGIDS[f.structureMat || structureKey()];
+    const slug = (f.name || info(f.rule).name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const meshes = [
+      { name: "felt", material: "felt", color: SOFT_COLORS[f.material], rough: 1, ...g.felt },
+      { name: "felt-shell", material: "felt", color: SOFT_COLORS[f.material], rough: 1, ...g.feltShell },
+      { name: "structure", material: "structure", color: HARD_COLORS[f.structureMat || structureKey()] || 0x8d9198, rough: 0.6, ...g.structure },
+      { name: "structure-shell", material: "structure", color: HARD_COLORS[f.structureMat || structureKey()] || 0x8d9198, rough: 0.6, ...g.structureShell },
+    ].filter((m) => m.idx.length);
+    const felt = meshes.filter((m) => m.material === "felt"), struct = meshes.filter((m) => m.material === "structure"), b = G.bounds(parts), tris = meshes.reduce((a, m) => a + m.idx.length / 3, 0);
+    const mtl = ["newmtl felt", `Kd ${linear(SOFT_COLORS[f.material]).map((x) => x.toFixed(3)).join(" ")}`, "newmtl structure", `Kd ${linear(HARD_COLORS[f.structureMat || structureKey()] || 0x8d9198).map((x) => x.toFixed(3)).join(" ")}`].join("\n") + "\n";
+    const readme = [`${f.name || info(f.rule).name}`, `Biothing Sound Lab, generator: ${info(f.rule).name} (${MOUNT_NAME[f.mount]})`, "",
+      `Size: ${Math.round((b.max[0] - b.min[0]) * 1000)} x ${Math.round((b.max[1] - b.min[1]) * 1000)} x ${Math.round((b.max[2] - b.min[2]) * 1000)} mm (x across, y depth, z up)`,
+      `Soft material: ${soft.name}, about ${fix(f.mass, 2)} kg`, `Structure: ${hard.name}${f.stance ? `, about ${fix(f.stance.structureMass, 2)} kg` : ""}`, `Held by: ${parts.label || f.holdfast || "its own parts"}`,
+      f.stance ? `Stability: leans ${fix(f.stance.angle, 0)} degrees before tipping (${f.stance.ok ? "stable" : "NOT stable enough"})` : "",
+      `Absorption per piece (2D wave simulation, about 25% conservative): ${f.area.map((a, i) => `${fix(a, 2)} m2 at ${G.BANDS[i]} Hz`).join(", ")}`,
+      `Description: ${describeOf(f)}`, "",
+      "Files:", `  ${slug}.glb             all parts with colours (Blender, Rhino 8, 3ds Max, online glTF viewers); metres, y up`,
+      `  ${slug}.stl             all parts as one solid set, millimetres, z up`, felt.length ? `  ${slug}-felt.stl        only the soft parts (to cut, press or mould)` : "", struct.length ? `  ${slug}-structure.stl   only the structure (to print, mill or weld)` : "",
+      `  ${slug}.obj / .mtl      the same, metres, z up`, f.cutPlan ? `  ${slug}-cut.svg         laser cut file of the sheet` : "", f.stripPlan ? `  ${slug}-strips.svg      the slotted strips laid flat for cutting` : "", `  ${slug}-front.svg       front view at 1:1`, "",
+      `${tris} triangles. Every part is a closed solid: sheets keep their real thickness, shells are thickened, loose parts are tied to the body with thin threads.`,
+      "Absorption and stability come from simplified models: build a sample and measure before making many."].filter((x) => x !== "").join("\n") + "\n";
+    const files = [{ name: `${slug}/README.txt`, data: readme }, { name: `${slug}/${slug}.glb`, data: toGLB(meshes) }, { name: `${slug}/${slug}.stl`, data: toSTL(meshes, f.name || "") },
+      ...(felt.length && struct.length ? [{ name: `${slug}/${slug}-felt.stl`, data: toSTL(felt, "felt") }, { name: `${slug}/${slug}-structure.stl`, data: toSTL(struct, "structure") }] : []),
+      { name: `${slug}/${slug}.obj`, data: toOBJ(meshes, slug + ".mtl") }, { name: `${slug}/${slug}.mtl`, data: mtl }, { name: `${slug}/${slug}-front.svg`, data: drawingSVG({ ...f, parts }) },
+      ...(f.cutPlan ? [{ name: `${slug}/${slug}-cut.svg`, data: cutSVG(f) }] : []), ...(f.stripPlan ? [{ name: `${slug}/${slug}-strips.svg`, data: stripSVG(f) }] : [])];
+    await saveFile(slug + "-3d-model.zip", zip(files), btn, label);
+  } catch (err) {
+    addMsg("note", "Could not build the model: " + err.message);
+    if (btn) btn.textContent = label;
+  } finally { if (btn) btn.disabled = false; }
 }
 
 // ------------------------------------------------------- surface pieces ----

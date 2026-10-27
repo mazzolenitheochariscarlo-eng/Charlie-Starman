@@ -80,6 +80,8 @@
   // Places: "standing" a single freestanding module, "hanging" a ceiling piece, "wall" a double-sided
   // partition standing on the ground, "wallhung" the same partition hung from the ceiling.
   const onGround = (m) => m === "standing" || m === "wall", hung = (m) => m === "hanging" || m === "wallhung", isWall = (m) => m === "wall" || m === "wallhung";
+  // Detail: 1 for simulation, 2 for previews, 3 for downloads (finer meshes, more parts, same genome).
+  let DETAIL = 1;
   const simMount = (m) => (m === "wall" ? "standing" : m === "wallhung" ? "hanging" : m);
   // Apply an affine point map to every part (sheets: centre and edge vectors; triangles: corners).
   function mapParts(parts, fn) {
@@ -344,7 +346,7 @@
         const curve = planCurve(plan, curv, L), at = (Fm, s2, z) => sampleField(Fm, nx, nz, (s2 / L + 0.5), z / H);
         const makeTiles = (Fm) => {
           const tiles = [];
-          for (let a = 0; a < 2600 && tiles.length < 700; a++) {
+          for (let a = 0; a < 2600 * DETAIL && tiles.length < 700 * DETAIL; a++) {
             const m = rMax * 0.6, s2 = (rand() - 0.5) * (L - 2 * m), z = 0.06 + m + rand() * (H - 0.08 - 2 * m), f = Math.pow(Math.max(0, Math.min(1, at(Fm, s2, z))), gamma);
             const r = lerp(rMax, rMin, f) * (1 + rhythmGain * strength * 0.4 * Math.sin((2 * Math.PI * z) / period));
             if (tiles.some((o) => Math.hypot(o.s - s2, o.z - z) < (o.r + r) / 2)) continue;
@@ -601,6 +603,11 @@
     { f: (X, Y, Z) => Math.cos(X) + Math.cos(Y) + Math.cos(Z), max: 3 },
     { f: (X, Y, Z) => Math.sin(X) * Math.sin(Y) * Math.sin(Z) + Math.sin(X) * Math.cos(Y) * Math.cos(Z) + Math.cos(X) * Math.sin(Y) * Math.cos(Z) + Math.cos(X) * Math.cos(Y) * Math.sin(Z), max: 1.42 },
   ];
+  // Turn a triangle so its normal points from the inside (value < 0) to the outside.
+  function orient(tr, ins, outs, cp) {
+    const mean = (ids) => mul(ids.reduce((acc, q) => add(acc, cp[q]), [0, 0, 0]), 1 / ids.length), g = sub(mean(outs), mean(ins));
+    return dot(cross(sub(tr[1], tr[0]), sub(tr[2], tr[0])), g) < 0 ? [tr[0], tr[2], tr[1]] : tr;
+  }
   // Marching tetrahedra over a grid: triangles of the surface value(x, y, z) = 0.
   function isoTriangles(value, x0, y0, z0, hx, hy, hz, nx, ny, nz, keepTri) {
     const V = new Float32Array((nx + 1) * (ny + 1) * (nz + 1)), id = (i, j, k) => i + (nx + 1) * (j + (ny + 1) * k), P = (i, j, k) => [x0 + i * hx, y0 + j * hy, z0 + k * hz];
@@ -617,10 +624,10 @@
         if (!ins.length || !outs.length) continue;
         if (ins.length === 1 || outs.length === 1) {
           const lone = ins.length === 1 ? ins[0] : outs[0], rest = ins.length === 1 ? outs : ins;
-          out.push(rest.map((q) => cut(cp[lone], cv[lone], cp[q], cv[q])));
+          out.push(orient(rest.map((q) => cut(cp[lone], cv[lone], cp[q], cv[q])), ins, outs, cp));
         } else {
           const [a, b] = ins, [c, d] = outs, p1 = cut(cp[a], cv[a], cp[c], cv[c]), p2 = cut(cp[a], cv[a], cp[d], cv[d]), p3 = cut(cp[b], cv[b], cp[d], cv[d]), p4 = cut(cp[b], cv[b], cp[c], cv[c]);
-          out.push([p1, p2, p3], [p1, p3, p4]);
+          out.push(orient([p1, p2, p3], ins, outs, cp), orient([p1, p3, p4], ins, outs, cp));
         }
       }
     }
@@ -691,10 +698,16 @@
           if (centres.some((o) => o !== C && Math.hypot(o[0] - x, o[1] - z) < Math.hypot(C[0] - x, C[1] - z))) continue;
           const L = lerp(Lc, Le, fr), w = L * ratio, ang = ((lerp(oLo, oHi, f(x, z)) * Math.PI) / 180), dl = Math.hypot(x - C[0], z - C[1]) || 1;
           const dir = [(x - C[0]) / dl, 0, (z - C[1]) / dl], side = [dir[2], 0, -dir[0]], Y = [0, 1, 0];
-          const e1 = add(mul(dir, Math.cos(ang)), mul(Y, Math.sin(ang))), a2 = Math.min(Math.PI * 0.95, ang + curl), e2 = add(mul(dir, Math.cos(a2)), mul(Y, Math.sin(a2)));
-          const p0 = [x, t, z], p1 = add(p0, mul(e1, L / 2));
-          parts.push({ c: add(p0, mul(e1, L / 4)), u: mul(e1, L / 4), v: mul(side, w / 2), t });
-          parts.push({ c: add(p1, mul(e2, L / 4)), u: mul(e2, L / 4), v: mul(side, w * 0.3), t });
+          // a petal bends from its opening angle by the curl, in segments that taper to a tip
+          const segs = 2 * DETAIL;
+          let p0 = [x, t, z];
+          for (let k = 0; k < segs; k++) {
+            const a2 = Math.min(Math.PI * 0.95, ang + (curl * k) / Math.max(1, segs - 1)), e = add(mul(dir, Math.cos(a2)), mul(Y, Math.sin(a2))), ls = L / segs;
+            const wk = w * (1 - 0.7 * Math.pow((k + 0.5) / segs, 1.5));
+            parts.push({ c: add(p0, mul(e, ls / 2)), u: mul(e, ls / 2), v: mul(side, wk / 2), t });
+            p0 = add(p0, mul(e, ls));
+          }
+          const e1 = add(mul(dir, Math.cos(ang)), mul(Y, Math.sin(ang)));
           depthMax[0] = Math.max(depthMax[0], L * Math.sin(ang));
         }
         if (v(9) === 1) parts.push({ c: [0, t / 2, Hm / 2], u: [W / 2, 0, 0], v: [0, 0, Hm / 2], t });
@@ -774,7 +787,7 @@
         };
         const inside = (p) => { const z = p[2], u = z / H, rot = twist * u, x = p[0] * Math.cos(rot) + p[1] * Math.sin(rot), y = -p[0] * Math.sin(rot) + p[1] * Math.cos(rot); return z >= -1e-6 && z <= H + 1e-6 && Math.max(Math.abs(x), Math.abs(y)) <= radius(z) + 1e-6; };
         let cell = a, n = 0;
-        for (let it = 0; it < 4; it++) { n = Math.ceil(W / cell) ** 2 * Math.ceil(H / cell); if (n * UNIT[Math.min(3, v(1))].length * 0.35 < 14000) break; cell *= 1.25; }
+        for (let it = 0; it < 4; it++) { n = Math.ceil(W / cell) ** 2 * Math.ceil(H / cell); if (n * UNIT[Math.min(3, v(1))].length * 0.35 < 14000 * DETAIL ** 1.5) break; cell *= 1.25; }
         const nu = Math.ceil(W / cell), nw = Math.ceil(H / cell), map = (u, vv, w) => [-W / 2 + (u / nu) * W, -W / 2 + (vv / nu) * W, (w / nw) * H];
         const parts = latticeStruts(Math.min(3, v(1)), nu, nu, nw, map, inside, () => v(3));
         const balls = [];
@@ -803,7 +816,7 @@
       xs = warp1D(W, (u) => lerp(cHi, cLo, col(u)) * grow); zs = warp1D(Hm, (w) => lerp(cHi, cLo, row(w)) * grow);
       nv = Math.max(1, Math.round(D / ((cLo + cHi) / 2 / grow)));
       const cells = (xs.length - 1) * (zs.length - 1) * nv;
-      if (surface ? cells < 2500 : cells * (v(0) === 4 ? 6 : UNIT[v(0)].length) * 0.4 < 12000) break;
+      if (surface ? cells < 2500 * DETAIL ** 1.5 : cells * (v(0) === 4 ? 6 : UNIT[v(0)].length) * 0.4 < 12000 * DETAIL ** 1.5) break;
       grow *= 1.2;
     }
     const nu = xs.length - 1, nw = zs.length - 1, Dsurf = (x, z) => D * (1 - wave * (1 - f(x, z)));
@@ -811,7 +824,7 @@
     let parts;
     if (!surface) parts = latticeStruts(v(0), nu, nv, nw, map, null, (p) => lerp(v(3), Math.max(v(3), v(4)), f(p[0], p[2])));
     else {
-      const T = TPMS[v(0)], tLo = v(3), tHi = Math.max(v(3), v(4)), cell = (cLo + cHi) / 2 / grow, h = Math.max(cLo / grow / 4, Math.cbrt((W * Hm * D) / 7000));
+      const T = TPMS[v(0)], tLo = v(3), tHi = Math.max(v(3), v(4)), cell = (cLo + cHi) / 2 / grow, h = Math.max(cLo / grow / (3 + DETAIL), Math.cbrt((W * Hm * D) / (7000 * DETAIL ** 2)));
       const gx = Math.ceil(W / h), gy = Math.max(2, Math.ceil(D / h)), gz = Math.ceil(Hm / h);
       const val = (x, y, z) => { const ds = Dsurf(x, z); return T.f(2 * Math.PI * invWarp(xs, x + W / 2), (2 * Math.PI * nv * y) / Math.max(ds, 1e-3), 2 * Math.PI * invWarp(zs, z)); };
       const tris = isoTriangles(val, -W / 2, 0, 0, W / gx, D / gy, Hm / gz, gx, gy, gz, (tr) => { const c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); return c[1] <= Dsurf(c[0], c[2]) + 1e-6; });
@@ -842,7 +855,7 @@
       const v = (i) => paramValue("cellular", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(5)), rand = rng(seedOf(g) + 5);
       const rule = v(0), D = Math.min(ctx.env.depth || 0.3, v(6)), style = v(7);
       let a = v(1);
-      while ((W / a) * (Hm / a) * (D / a) > 40000) a *= 1.15;
+      while ((W / a) * (Hm / a) * (D / a) > 40000 * DETAIL) a *= 1.15;
       const nx = Math.max(2, Math.round(W / a)), ny = Math.max(2, Math.round(D / a)), nz = Math.max(2, Math.round(Hm / a)), N = nx * ny * nz;
       const id = (i, j, k) => i + nx * (j + ny * k), born = new Int16Array(N).fill(-1), pos = (i, j, k) => [-W / 2 + (i + 0.5) * (W / nx), (j + 0.5) * (D / ny), (k + 0.5) * (Hm / nz)];
       const fCell = new Float32Array(N);
@@ -910,10 +923,10 @@
         x = bx; y = Math.max(-D / 3, Math.min(D / 3, y + (rand() - 0.5) * D * 0.4 * flow));
         blobs.push([x, isWall(mount) ? Math.max(-D / 4, Math.min(D / 4, y)) : y, z, R0 * (0.6 + 0.6 * rand())]);
       }
-      const k2 = 1 / (melt * melt), h0 = Math.max(0.03, Math.cbrt((W * (isWall(mount) ? env.depth : W) * H) / 22000));
+      const k2 = 1 / (melt * melt), h0 = Math.max(0.03 / DETAIL, Math.cbrt((W * (isWall(mount) ? env.depth : W) * H) / (22000 * DETAIL ** 2)));
       for (const b of blobs) b[3] = Math.max(b[3], (2 * h0) / (0.83 * melt)); // never smaller than the mesh can see
       const val = (px, py, pz) => { let s2 = 0; for (const [bx, by, bz, r] of blobs) s2 += Math.exp((-k2 * ((px - bx) ** 2 + (py - by) ** 2 + (pz - bz) ** 2)) / (r * r)); return 0.5 - s2; };
-      const y0 = -D / 2, h = Math.max(0.03, Math.cbrt((W * D * H) / 22000)), gx = Math.ceil(W / h), gy = Math.max(2, Math.ceil(D / h)), gz = Math.ceil(H / h);
+      const y0 = -D / 2, h = h0, gx = Math.ceil(W / h), gy = Math.max(2, Math.ceil(D / h)), gz = Math.ceil(H / h);
       let tris = isoTriangles(val, -W / 2, y0, 0, W / gx, D / gy, H / gz, gx, gy, gz);
       // holes: random points on the surface, open widest where the field is strong
       const holes = [];
@@ -941,7 +954,7 @@
       const v = (i) => paramValue("swarm", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(12)), rand = rng(seedOf(g) + 31);
       const D = Math.min(ctx.env.depth || 0.3, v(7)), r = v(8), printed = v(11) === 1, a0 = (v(2) * Math.PI) / 180, base = [Math.cos(a0), Math.sin(a0)];
       let nA = v(0), steps = v(1);
-      while (nA * steps > 14000) { nA = Math.round(nA * 0.9); steps = Math.round(steps * 0.95); }
+      while (nA * steps > 14000 * DETAIL) { nA = Math.round(nA * 0.9); steps = Math.round(steps * 0.95); }
       const stepLen = Math.max(0.012, Math.min(W, Hm) / 60), R = 0.08, parts = [], extra = printed ? { structure: true } : {};
       const spawn = () => { const side = rand(); return side < 0.5 ? { x: -W / 2 + rand() * W, z: base[1] > 0 ? 0.001 : Hm - 0.001 } : { x: base[0] > 0 ? -W / 2 + 0.001 : W / 2 - 0.001, z: rand() * Hm }; };
       const agents = Array.from({ length: nA }, () => ({ ...{ x: -W / 2 + rand() * W, z: rand() * Hm }, d: [...base], ph: rand() * 6.283, y: 0 }));
@@ -998,7 +1011,7 @@
       for (const P of pulls) { s2 += seg(a, b, n, P); s2 -= 0.9 * Math.exp((-((a - P[0]) ** 2 + (b - P[1]) ** 2 + (n + th * 0.6) ** 2)) / (r0 * r0 * 0.5)); }
       return 0.5 - s2;
     };
-    const h = Math.max(0.025, Math.cbrt((W * span * (L + 0.1)) / 22000)), ga = Math.ceil(W / h), gb = Math.ceil(span / h), gn = Math.ceil((L + 0.12) / h);
+    const h = Math.max(0.025 / DETAIL, Math.cbrt((W * span * (L + 0.1)) / (22000 * DETAIL ** 2))), ga = Math.ceil(W / h), gb = Math.ceil(span / h), gn = Math.ceil((L + 0.12) / h);
     let tris = isoTriangles(val, -W / 2, 0, -0.08, W / ga, span / gb, (L + 0.12) / gn, ga, gb, gn);
     const holes = [];
     for (let k = 0; k < v(4) && tris.length; k++) { const tr = tris[Math.floor(rand() * tris.length)], c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); holes.push([c, v(5) * (0.25 + 0.75 * f(c[0], c[1]))]); }
@@ -1100,7 +1113,71 @@
     } else out.label = footings(out, planCurve(0, 0, env.width), env.width, Hm + 0.1, 2, Math.max(0.2, env.depth), false);
     return out;
   }
+  // A real object holds together: find groups of parts that touch nothing else (felt balls in a lattice,
+  // islands of a shell, petals off the backing) and tie each to the main body with a thin thread or pin.
+  function tieUp(parts) {
+    const n = parts.length;
+    if (n < 2) return parts;
+    const up = Int32Array.from({ length: n }, (_, i) => i), find = (i) => { while (up[i] !== i) { up[i] = up[up[i]]; i = up[i]; } return i; };
+    const S = [], CELL = 0.03, key = (x, y, z) => ((Math.floor(x / CELL) * 73856093) ^ (Math.floor(y / CELL) * 19349663) ^ (Math.floor(z / CELL) * 83492791)) >>> 0;
+    const addS = (q, r, i) => S.push([q[0], q[1], q[2], r, i]);
+    // triangles of one mesh hold together through their shared corners
+    const vkey = (q) => ((Math.round(q[0] * 2e4) * 73856093) ^ (Math.round(q[1] * 2e4) * 19349663) ^ (Math.round(q[2] * 2e4) * 83492791)) >>> 0, corner = new Map();
+    let triSeen = 0;
+    parts.forEach((p, i) => {
+      if (isTri(p)) {
+        for (const q of p.tri) { const k = vkey(q), o = corner.get(k); if (o === undefined) corner.set(k, i); else { const a = find(o), b = find(i); if (a !== b) up[a] = b; } }
+        if (triSeen++ % 8 === 0) addS(p.tri[0], p.t / 2 + 0.01, i); // a few samples to meet other parts
+        return;
+      }
+      if (isSheet(p)) {
+        const nu = Math.min(40, Math.max(1, Math.ceil((Math.hypot(...p.u) * 2) / 0.025))), nv = Math.min(40, Math.max(1, Math.ceil((Math.hypot(...p.v) * 2) / 0.025)));
+        for (let a = 0; a <= nu; a++) for (let b = 0; b <= nv; b++) addS(add(p.c, add(mul(p.u, (2 * a) / nu - 1), mul(p.v, (2 * b) / nv - 1))), p.t / 2, i);
+        return;
+      }
+      const L = Math.hypot(...sub(p.b, p.a)), m = Math.min(60, Math.max(1, Math.ceil(L / 0.025)));
+      for (let k = 0; k <= m; k++) addS(add(p.a, mul(sub(p.b, p.a), k / m)), p.r, i);
+    });
+    const grid = new Map();
+    S.forEach((s2, j) => { const k = key(s2[0], s2[1], s2[2]); let l = grid.get(k); if (!l) grid.set(k, (l = [])); l.push(j); });
+    const near = (s2, fn) => {
+      const cx = Math.floor(s2[0] / CELL), cy = Math.floor(s2[1] / CELL), cz = Math.floor(s2[2] / CELL);
+      for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const l = grid.get((((cx + dx) * 73856093) ^ ((cy + dy) * 19349663) ^ ((cz + dz) * 83492791)) >>> 0);
+        if (l) for (const j of l) fn(j);
+      }
+    };
+    for (const s2 of S) near(s2, (j) => {
+      const o = S[j];
+      if (o[4] === s2[4] || find(o[4]) === find(s2[4])) return;
+      if (Math.hypot(o[0] - s2[0], o[1] - s2[1], o[2] - s2[2]) <= s2[3] + o[3] + 0.006) up[find(o[4])] = find(s2[4]);
+    });
+    const count = new Map();
+    for (const s2 of S) { const r = find(s2[4]); count.set(r, (count.get(r) || 0) + 1); }
+    if (count.size < 2) return parts;
+    const main = [...count.entries()].sort((a, b) => b[1] - a[1])[0][0], mainS = S.filter((s2) => find(s2[4]) === main);
+    const groups = new Map();
+    for (const s2 of S) { const r = find(s2[4]); if (r !== main) { let l = groups.get(r); if (!l) groups.set(r, (l = [])); l.push(s2); } }
+    let ties = 0;
+    for (const list of groups.values()) {
+      // the closest pair between this group and the main body (sampled)
+      let best = null, bd = Infinity;
+      const pick = mainS.length > 3000 ? mainS.filter((_, k) => k % Math.ceil(mainS.length / 3000) === 0) : mainS, mine = list.length > 60 ? list.filter((_, k) => k % Math.ceil(list.length / 60) === 0) : list;
+      for (const a of mine) for (const b of pick) { const d = (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2; if (d < bd) { bd = d; best = [a, b]; } }
+      if (!best) continue;
+      parts.push({ a: best[0].slice(0, 3), b: best[1].slice(0, 3), r: 0.0015, structure: true });
+      ties++;
+    }
+    parts.ties = ties;
+    if (ties) parts.label = (parts.label ? parts.label + ", " : "") + `${ties} thread tie${ties === 1 ? "" : "s"} holding loose parts`;
+    return parts;
+  }
+
   function grow(rule, genes, opts) {
+    DETAIL = opts.detail || 1;
+    try { const parts = growRaw(rule, genes, opts); return opts.tie === false ? parts : tieUp(parts); } finally { DETAIL = 1; }
+  }
+  function growRaw(rule, genes, opts) {
     const env = envelope(opts.size, opts.mount), R = RULES[rule], ctx = { env, field: opts.field, material: opts.material, mount: opts.mount };
     if (R.direct) return R.build(genes, hung(opts.mount), ctx);
     if (isWall(opts.mount)) return toPartition(R.build(genes, true), env, opts.mount);
