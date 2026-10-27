@@ -150,6 +150,14 @@ tr.current td { background: var(--panel-2); }
 .rowc { display: flex; gap: 6px; align-items: center; }
 @media (max-width: 700px) { .graph { grid-auto-flow: row; grid-auto-columns: auto; } .node + .node::before { left: 18px; top: -27px; width: 2px; height: 26px; } .node + .node::after { left: 15px; top: -5px; } }
 .primer { margin: 4px 0 6px; }
+.mech-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.mech { display: grid; gap: 4px; padding: 10px; border: 1px solid rgba(127, 127, 127, 0.35); border-radius: 6px; background: rgba(127, 127, 127, 0.08); color: inherit; font-size: 13px; }
+.minib { display: inline-flex; gap: 2px; align-items: end; height: 22px; }
+.minib i { display: block; width: 9px; background: var(--accent); border-radius: 1px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+tr[data-atlas] { cursor: pointer; }
+.progress.wide { display: block; width: 100%; max-width: 420px; }
+#atlas-detail .field-pair > div:first-child { min-width: 0; }
 .primer summary { cursor: pointer; font-weight: 600; }
 .primer ol { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 6px; }
 #room-pick { max-width: 150px; }
@@ -256,6 +264,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     <div class="tabs" role="tablist" id="ws-tabs" aria-label="Workspaces">
       <button role="tab" data-ws="grow" id="tab-grow">Studio</button>
       <button role="tab" data-ws="materials" id="tab-materials">Materials</button>
+      <button role="tab" data-ws="atlas" id="tab-atlas">Structures</button>
     </div>
     <span class="spacer"></span>
     <button class="btn" id="tour-start">Guided tour</button>
@@ -2512,6 +2521,7 @@ function renderOptbar() {
   const ob = $("#optbar");
   ob.classList.remove("studio");
   if (gmode() === "forms") { renderFormsBar(ob); return; }
+  if (state.ws === "atlas") { atlasBar(ob); return; }
   if (state.ws === "spaces") {
     ob.innerHTML = `<div class="opt" id="opt-add"><label for="add-preset">Add a space</label>
         <select id="add-preset">${R.PRESETS.map((p) => `<option value="${p.key}">${p.name} (${p.size.join(" × ")} m)</option>`).join("")}</select>
@@ -2557,6 +2567,7 @@ function updateOutputs() {
 function renderTools() {
   let items;
   if (state.ws === "materials") items = [["chart", "Compare chart"], ["table", "Material table"]];
+  else if (state.ws === "atlas") items = ATLAS_FILTERS.map(([k, l]) => [k, "Show: " + l]);
   else if (state.ws === "grow") items = [["allsurf", "All surface textures (as freestanding double-sided screens)"], ...E.FAMILIES.map((f) => [f.key, `${f.name} (surface texture${f.key === "cloud" ? ", hangs" : ""}): imitates ${f.imitates}`]), "sep",
     ["all", "All natural growth rules"], ...NATURAL.map((k) => [k, `${G.RULES[k].name}: imitates ${G.RULES[k].imitates}`]), "sep",
     ["allsheets", "All sheet hybrids (felt sheets arranged by nature)"], ...HYBRID.map((k) => [k, `${G.RULES[k].name} (sheets): imitates ${G.RULES[k].imitates}`]), "sep",
@@ -2566,7 +2577,7 @@ function renderTools() {
   else items = [["orbit", "Orbit view (drag in the viewport)"], ["top", "Top view"], ["home", "Reset view"], "sep", ["eye", "Show or hide absorbers"]];
   $("#tools").innerHTML = items.map((it) => it === "sep" ? '<span class="tool-sep" aria-hidden="true"></span>' : (() => {
     const [k, label] = it;
-    const pressed = k === "eye" ? state.showAbs : state.ws === "grow" ? state.gtool === k : state.ws === "materials" ? state.matView === k : k === "eye" ? state.showAbs : false;
+    const pressed = state.ws === "atlas" ? state.atlas.filter === k : k === "eye" ? state.showAbs : state.ws === "grow" ? state.gtool === k : state.ws === "materials" ? state.matView === k : k === "eye" ? state.showAbs : false;
     return `<button class="tool" data-tool="${k}" aria-pressed="${pressed}" aria-label="${esc(label)}" title="${esc(label)}">${icon(k)}</button>`;
   })()).join("");
 }
@@ -2576,6 +2587,7 @@ $("#tools").addEventListener("click", (e) => {
   const k = b.dataset.tool;
   if (state.ws === "grow" && !["orbit", "top", "home", "eye"].includes(k)) setTool(k);
   else if (state.ws === "materials") { state.matView = k; renderTools(); renderCanvas(); }
+  else if (state.ws === "atlas") { state.atlas.filter = k; renderTools(); renderCanvas(); renderDock(); }
   else if (k === "eye") { state.showAbs = !state.showAbs; renderTools(); View3D.update(); }
   else View3D.preset(k);
 });
@@ -2770,6 +2782,7 @@ function renderCanvas() {
   View3D.detach();
   const c = $("#canvas");
   if (state.ws === "materials") { c.innerHTML = materialsCanvas(); bindMaterialsCanvas(); return; }
+  if (state.ws === "atlas") { atlasCanvas(); return; }
   if (!allowedSoft().length) { c.innerHTML = `<div class="artboard"><h2>No soft materials selected</h2><p class="muted">Open the Materials workspace and pick at least one.</p></div>`; return; }
   if (state.tool === "all") {
     const wallRank = rankedWall().map((r) => r.family);
@@ -2835,6 +2848,7 @@ function renderDock() {
   const d = $("#dock");
   if (gmode() === "shapes") d.innerHTML = propertiesPanel() + layersPanel() + formsLayersPanel();
   else if (state.ws === "materials") d.innerHTML = materialsPanel() + rigidPanel();
+  else if (state.ws === "atlas") d.innerHTML = atlasPanel();
   else if (gmode() === "forms") d.innerHTML = spacesPanel() + absorbersPanel() + soundPanel() + formsPropsPanel() + formsLayersPanel() + spacePropsPanel();
   else d.innerHTML = spacesPanel() + spacePropsPanel() + absorbersPanel();
   bindDock();
@@ -4754,6 +4768,193 @@ function stripSVG(f) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!-- Biothing Sound Lab: ${esc(f.name)}. ${P.strips.length} felt strips, ${Math.round(t)} mm. Red: cut (slots are ${Math.round(t)} mm wide). Blue: labels (V = vertical strips, slotted from the back; H = horizontal, slotted from the front). -->\n<svg xmlns="http://www.w3.org/2000/svg" width="${(maxL + 40).toFixed(0)}mm" height="${y.toFixed(0)}mm" viewBox="0 0 ${(maxL + 40).toFixed(1)} ${y.toFixed(1)}">\n${body}\n</svg>\n`;
 }
 
+// ------------------------------------------------------------ structures ---
+// A third mode: every surface texture and structure measured the same way (same size, felt, place,
+// a neutral genome with every value in the middle, an even field), to compare how and where each absorbs.
+const MECH = {
+  spikes: ["Graded porosity", "Tapered spikes let sound in gently, then the felt grows denser towards the back, so little bounces off the front.", "Pressed or cut foam/felt wedges."],
+  sponge: ["Graded porosity", "Open felt at the front and denser felt behind (sometimes with an air gap): sound slows down step by step.", "Layers of felt of different density."],
+  cloud: ["Felt in free air", "A slab hung in the room works on both faces and its edges, and moves a little with the sound.", "Felt slab on cables."],
+  bottles: ["Resonators", "Cavities with a neck ring like a bottle you blow across: each catches one band of low pitch, the felt widens it.", "Perforated plate over cells."],
+  coil: ["Resonators", "Long folded channels behave like organ pipes rolled up: deep low-pitch absorption from a thin panel.", "Folded or printed channels."],
+  hybrid: ["Air gap behind felt", "Felt in front of a perforated plate and air cavity, like moss on a shell: porous friction plus resonance.", "Felt, a perforated board, a frame."],
+  tree: ["Edges and open sheets", "Branches give many edges for little material; at these sizes the thin branches mostly let sound pass.", "Rods or tubes covered in felt."],
+  snow: ["Edges and open sheets", "Crystal arms are mostly air; useful mainly for higher pitches.", "Cut felt arms slotted together."],
+  coral: ["Felt in free air", "Ruffled sheets add surface and edges in a compact body, each face working.", "Heat-formed felt sheets on a stem."],
+  shell: ["Cavities", "Chambered tube walls trap air inside a lattice; a little resonance for lower pitches.", "Printed lattice or bent strips."],
+  foam: ["Porous volume", "A loose cloud of felt balls: a porous body with air between, sound reaches each ball.", "Felt balls on threads or a frame."],
+  leaves: ["Felt in free air", "Flat felt leaves held apart: both faces of every leaf work and sound reaches each one.", "Felt sheets on a branching frame."],
+  gills: ["Felt in free air", "Radial fins pack a lot of felt surface into a small volume, open between the fins.", "Slotted felt fins on a hub."],
+  cone: ["Felt in free air", "Scales opened outward on a spiral shade each other little and work on both faces.", "Felt scales on a core."],
+  lamellae: ["Felt in free air", "Stacked twisted sheets with gaps: sound enters between them from every direction.", "Felt sheets on spacers."],
+  membrane: ["Felt in free air", "A cellular felt sheet, denser where air moves most, standing free in the room.", "Felt cells stitched or riveted together."],
+  cutsheet: ["Edges and open sheets", "One flat sheet whose flaps open where sound is strong, exposing edges and both faces.", "Laser-cut felt, then folded."],
+  voronoi: ["Depth and cavities", "Felt cell walls make deep pockets: sound is trapped and rubbed along many walls.", "Felt strips or a pressed relief."],
+  petals: ["Felt in free air", "Petals opening out of the face catch sound on both sides; most effective at higher pitches.", "Cut felt petals stitched to a backing."],
+  strips: ["Depth and cavities", "An egg-crate of felt strips: deep cells with felt on every side.", "Slotted felt strips, flat-pack."],
+  strutlattice: ["Felt in a printed frame", "The printed struts barely absorb (their gaps are far too big to rub the air); the felt balls in the cells do.", "3D-printed lattice with felt balls."],
+  tpms: ["Felt in a printed frame", "A printed shell splitting space into two labyrinths; felt in one labyrinth absorbs.", "3D-printed shell with felt filling."],
+  spatial: ["Felt in a printed frame", "A large printed lattice body; the felt pockets inside absorb, the struts mostly let sound through.", "Robotically printed lattice, felt pockets."],
+  cellular: ["Porous volume", "Felt blocks grown cell by cell into a porous body with many cavities.", "Felt blocks glued or pinned."],
+  bioform: ["Shell with holes", "A thin felt shell around an air volume: holes let sound inside, where it bounces between felt walls.", "Heat-formed felt shell."],
+  swarm: ["Fibre mat", "A thick mat of soft cords: the way felt itself works, at a larger scale.", "Wound or printed cords on a frame."],
+};
+const GROUP_OF = (k) => (isSurf(k) ? "Surface textures" : { hybrid: "Sheet hybrids", sound: "Sound-grown", pattern: "Patterns", lattice: "Lattices" }[G.RULES[k].group] || "Natural growth");
+const GROUP_COLORS = { "Surface textures": "#4a90e2", "Natural growth": "#5bb67c", "Sheet hybrids": "#3fb8b0", "Sound-grown": "#e6a23c", Patterns: "#b07ce0", Lattices: "#e46b5f", "My structures": "#d4d06a" };
+const ATLAS_FILTERS = [["all", "Everything"], ["allsurf", "Surface textures"], ["tree", "Natural growth"], ["allsheets", "Sheet hybrids"], ["membrane", "Sound-grown"], ["voronoi", "Patterns"], ["strutlattice", "Lattices"], ["eye", "My structures"]];
+const FILTER_GROUP = { allsurf: "Surface textures", tree: "Natural growth", allsheets: "Sheet hybrids", membrane: "Sound-grown", voronoi: "Patterns", strutlattice: "Lattices", eye: "My structures" };
+state.atlas = { mount: "wall", material: "pet_felt_medium", filter: "all", sel: null, rows: null, key: "", busy: false, progress: 0, rankBy: "piece" };
+const RANK_BY = { piece: ["Per piece", (r) => r.score, (v) => fix(v, 2) + " m²"], kg: ["Per kg of felt", (r) => (r.mass > 1e-3 ? r.score / r.mass : 0), (v) => fix(v, 2) + " m²/kg"], panel: ["Versus a panel", (r) => (r.bs > 1e-4 ? r.score / r.bs : 0), (v) => fix(v, 1) + "×"] };
+const atlasKey = () => JSON.stringify([state.atlas.mount, state.atlas.material, state.fSize, state.fBudget, formBandWeights().map((x) => x.toFixed(3))]);
+const wScore = (area) => area.reduce((a, x, i) => a + x * formBandWeights()[i], 0);
+function bestFor(area) {
+  const top = Math.max(...area, 1e-9);
+  if (area[0] >= 0.4 * top) return "low pitches too";
+  if (area[1] >= 0.7 * top) return "voices";
+  return "higher pitches";
+}
+async function measureAtlas() {
+  const a = state.atlas;
+  if (a.busy) return;
+  a.busy = true; a.progress = 0; a.sel = null;
+  renderOptbar(); renderCanvas();
+  const m = E.FELTS[a.material], material = { sigma: m.sigma, density: m.density }, weights = formBandWeights(), rows = [];
+  try {
+    for (const fam of E.FAMILIES) {
+      if (fam.key === "cloud" && a.mount !== "hanging") continue;
+      const b = { ...surfBrief(fam.key, state.fSize, a.mount), porous: [a.material] }, r = E.assess(fam, E.decode(fam, fam.genes.map(() => 0.5), b), b);
+      const pc = surfPiece(r, structureKey(), state.fSize, a.mount);
+      rows.push({ key: fam.key, name: fam.name, group: GROUP_OF(fam.key), area: pc.area, mass: pc.mass, print: 0, base: surfBaseline(pc), alpha: r.alpha, form: { ...pc, name: fam.name, id: "atlas-" + fam.key } });
+    }
+    const keys = RULE_KEYS;
+    let done = 0;
+    await Promise.all(keys.map(async (rule) => {
+      const genes = Array.from({ length: G.geneCount(rule) }, () => 0.5);
+      if (rule === "cellular") genes[7] = 0.1; // felt blocks
+      if (rule === "swarm") genes[11] = 0.1; // soft cords
+      const sKey = printKey(rule);
+      const r = await Pool.run("evaluate", { rule, genes, mount: a.mount, size: state.fSize, material, budget: state.fBudget, weights, structureDensity: E.RIGIDS[sKey].density, field: null });
+      const b = r.mass > 1e-3 ? await Pool.run("baseline", { material, mass: r.mass }) : { area: [0, 0, 0] };
+      rows.push({ key: rule, name: G.RULES[rule].name, group: GROUP_OF(rule), area: r.area, mass: r.mass, print: r.printMass || 0, base: b.area, stance: r.stance,
+        form: { ...r, material: a.material, structureMat: sKey, name: G.RULES[rule].name, id: "atlas-" + rule } });
+      a.progress = ++done / keys.length;
+      if ($("#atlas-progress")) $("#atlas-progress").style.width = a.progress * 100 + "%";
+    }));
+    a.rows = rows; a.key = atlasKey();
+  } catch (err) {
+    addMsg("note", "The measurement stopped: " + err.message);
+  } finally {
+    a.busy = false;
+  }
+  renderAll();
+}
+function atlasRows() {
+  const a = state.atlas;
+  if (!a.rows) return [];
+  const mine = state.forms.filter((f) => f.mount === a.mount).map((f) => ({ key: "form:" + f.id, name: f.name, group: "My structures", area: f.area, mass: f.mass, print: f.printMass || 0, base: f.baseline, rule: f.rule, form: f }));
+  const all = [...a.rows, ...mine].map((r) => ({ ...r, score: wScore(r.area), bs: r.base ? wScore(r.base) : 0 }));
+  const g = FILTER_GROUP[a.filter];
+  const by = RANK_BY[a.rankBy][1];
+  return all.filter((r) => !g || r.group === g).sort((p, q) => by(q) - by(p));
+}
+// Ranking bars: absorption per piece for the target, with a tick for a flat panel of the same felt and kg.
+function rankChart(rows) {
+  const [, by, fmt] = RANK_BY[state.atlas.rankBy], piece = state.atlas.rankBy === "piece";
+  const w = 680, rh = 22, L = 170, Rr = 90, h = rows.length * rh + 30, max = Math.max(piece ? 0.05 : 0.01, ...rows.map((r) => Math.max(by(r), piece ? r.bs : state.atlas.rankBy === "panel" ? 1 : 0))) * 1.05, X = (v) => L + (v / max) * (w - L - Rr);
+  let s = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Ranking of structures by absorption">`;
+  const stp = max > 4 ? 1 : max > 2 ? 0.5 : max > 0.6 ? 0.25 : 0.05;
+  for (let v = 0; v <= max; v += stp) s += `<line x1="${X(v)}" x2="${X(v)}" y1="4" y2="${h - 22}" stroke="var(--line)"/><text x="${X(v)}" y="${h - 8}" text-anchor="middle" font-size="10" fill="var(--muted)" font-family="var(--mono)">${v.toFixed(2)}</text>`;
+  if (state.atlas.rankBy === "panel") s += `<line x1="${X(1)}" x2="${X(1)}" y1="4" y2="${h - 22}" stroke="var(--ink)" stroke-dasharray="4 3" opacity="0.6"/>`;
+  rows.forEach((r, i) => {
+    const y = 6 + i * rh, sel = state.atlas.sel === r.key;
+    s += `<g class="atlas-hit" data-atlas="${esc(r.key)}" style="cursor:pointer"><rect x="0" y="${y - 2}" width="${w}" height="${rh}" fill="${sel ? "var(--raised)" : "transparent"}"/>
+      <text x="${L - 8}" y="${y + 13}" text-anchor="end" font-size="12" fill="var(--ink)" font-family="var(--sans)">${esc(r.name.length > 26 ? r.name.slice(0, 25) + "…" : r.name)}</text>
+      <rect x="${L}" y="${y + 3}" width="${Math.max(1, X(by(r)) - L)}" height="${rh - 8}" rx="2" fill="${GROUP_COLORS[r.group]}"/>
+      ${piece && r.bs > 1e-4 ? `<line x1="${X(r.bs)}" x2="${X(r.bs)}" y1="${y}" y2="${y + rh - 2}" stroke="var(--ink)" stroke-width="2" opacity="0.7"/>` : ""}
+      <text x="${Math.max(X(by(r)), piece && r.bs > 1e-4 ? X(r.bs) : 0) + 6}" y="${y + 13}" font-size="11" fill="var(--muted)" font-family="var(--mono)">${fmt(by(r))}</text></g>`;
+  });
+  return s + "</svg>";
+}
+// Absorption against felt weight: above the panel line beats a flat 50 mm panel of the same felt.
+function massChart(rows) {
+  const w = 680, h = 320, L = 50, B = 40, T = 12, Rr = 14, pts = rows.filter((r) => r.mass > 1e-3);
+  const xm = Math.max(0.5, ...pts.map((r) => r.mass)) * 1.08, ym = Math.max(0.1, ...pts.map((r) => r.score)) * 1.1, X = (v) => L + (v / xm) * (w - L - Rr), Y = (v) => T + (1 - v / ym) * (h - T - B);
+  const k = pts.filter((r) => r.bs > 0).reduce((a, r) => a + r.bs / r.mass, 0) / Math.max(1, pts.filter((r) => r.bs > 0).length);
+  let s = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Absorption against felt weight">`;
+  for (let v = 0; v <= ym; v += ym > 2 ? 0.5 : 0.25) s += `<line x1="${L}" x2="${w - Rr}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--line)"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="10" fill="var(--muted)" font-family="var(--mono)">${v.toFixed(2)}</text>`;
+  for (let v = 0; v <= xm; v += xm > 8 ? 2 : 1) s += `<text x="${X(v)}" y="${h - B + 16}" text-anchor="middle" font-size="10" fill="var(--muted)" font-family="var(--mono)">${v} kg</text>`;
+  if (k > 0) s += `<line x1="${X(0)}" y1="${Y(0)}" x2="${X(Math.min(xm, ym / k))}" y2="${Y(Math.min(xm, ym / k) * k)}" stroke="var(--ink)" stroke-dasharray="5 4" opacity="0.6"/><text x="${X(Math.min(xm, ym / k)) - 4}" y="${Y(Math.min(xm, ym / k) * k) + 14}" text-anchor="end" font-size="10" fill="var(--muted)" font-family="var(--sans)">flat 50 mm panel, same felt</text>`;
+  s += `<text x="${(L + w) / 2}" y="${h - 6}" text-anchor="middle" font-size="11" fill="var(--muted)" font-family="var(--sans)">felt per piece →</text>`;
+  const top = new Set(pts.slice().sort((p, q) => q.score - p.score).slice(0, 6).map((r) => r.key));
+  for (const r of pts) {
+    s += `<g class="atlas-hit" data-atlas="${esc(r.key)}" style="cursor:pointer"><circle cx="${X(r.mass)}" cy="${Y(r.score)}" r="${state.atlas.sel === r.key ? 7 : 5}" fill="${GROUP_COLORS[r.group]}" stroke="var(--app)" stroke-width="1.5"/>
+      ${top.has(r.key) || state.atlas.sel === r.key ? `<text x="${X(r.mass) + 8}" y="${Y(r.score) + 4}" font-size="11" fill="var(--ink)" font-family="var(--sans)">${esc(r.name)}</text>` : ""}<title>${esc(r.name)}: ${fix(r.score, 2)} m², ${fix(r.mass, 1)} kg</title></g>`;
+  }
+  return s + "</svg>";
+}
+const miniBars = (area, max) => `<span class="minib">${area.map((a) => `<i style="height:${Math.max(2, (a / max) * 100)}%"></i>`).join("")}</span>`;
+function atlasCanvas() {
+  const a = state.atlas, c = $("#canvas"), stale = a.rows && a.key !== atlasKey(), rows = atlasRows();
+  FormView.detach(); FormWave.stop(); View3D.detach();
+  const mechs = [["Friction in pores", "Air squeezing through the tiny gaps between fibres rubs and turns into a little heat. All felt, foam and fibre works this way. Thicker = lower pitches."],
+    ["Depth and air gaps", "Felt works where air moves fastest, a quarter wavelength from a hard surface. Depth, cells and air gaps behind the felt move absorption down to lower pitches."],
+    ["Resonance", "Cavities with a narrow opening (a bottle) or long channels (an organ pipe) ring at one pitch and swallow it: good for the low rumble felt alone can't reach."],
+    ["Open sheets and edges", "Thin felt hung in free air works on both faces and its edges. Spreading the same felt out into open, separated sheets catches more than packing it into one block."]];
+  const sel = rows.find((r) => r.key === a.sel);
+  c.innerHTML = `<div class="artboard"><div class="card-head"><h2>Structures and surfaces: how they absorb</h2><span class="muted">${MOUNT_NAME[a.mount]} · ${fix(state.fSize, 1)} m · ${esc(E.FELTS[a.material].name)} · ${state.fBudget} kg per piece</span></div>
+      <p>Every generator measured the same way: the same size, felt, place and budget, a neutral genome (every value in the middle) and an even field. So the differences come from the <strong>shape</strong> alone.</p>
+      <div class="mech-grid">${mechs.map(([t, d]) => `<div class="mech"><strong>${t}</strong><span>${d}</span></div>`).join("")}</div></div>
+    ${!a.rows || a.busy ? `<div class="card"><h3>${a.busy ? "Measuring…" : "Not measured yet"}</h3><p class="hint">${a.busy ? "Sending sound through every structure, one by one." : "Press <strong>Measure all</strong> in the options bar: about 15 seconds."}</p>
+      ${a.busy ? `<span class="progress wide"><i id="atlas-progress" style="width:${a.progress * 100}%"></i></span>` : ""}</div>` : `
+    ${stale ? '<p class="hint">Settings changed since this measurement: press Measure all again to update.</p>' : ""}
+    ${sel ? `<div class="card" id="atlas-detail"><div class="card-head"><h3>${esc(sel.name)}</h3><span class="hint">${esc(sel.group)}${MECH[sel.rule || sel.key] ? " · " + MECH[sel.rule || sel.key][0] : ""}</span></div>
+      <div class="field-pair"><div id="fv-slot"></div><div class="group">
+        <p>${esc(MECH[sel.rule || sel.key] ? MECH[sel.rule || sel.key][1] : "")}</p>
+        <dl class="facts">${G.BANDS.map((b, i) => `<dt>${hz(b)}</dt><dd>${fix(sel.area[i], 2)} m²</dd>`).join("")}<dt>Felt</dt><dd>${fix(sel.mass, 1)} kg</dd>${sel.print > 0.05 ? `<dt>Structure</dt><dd>${fix(sel.print, 1)} kg</dd>` : ""}
+          <dt>vs panel</dt><dd>${sel.bs > 1e-4 ? fix(sel.score / sel.bs, 1) + "×" : "–"}</dd><dt>Best for</dt><dd>${bestFor(sel.area)}</dd></dl>
+        <p class="hint">Made as: ${esc(MECH[sel.rule || sel.key] ? MECH[sel.rule || sel.key][2] : "")}</p>
+        <div class="chips"><button class="btn small primary" id="atlas-open">Open in the Studio</button><button class="chip" data-ask="Explain simply why the ${esc(sel.name)} absorbs sound the way it does, and how I could make it absorb more.">Ask the guide</button></div></div></div></div>` : ""}
+    <div class="card"><div class="card-head"><h3>Ranking for “${TARGET_INFO[state.target].label}”</h3>
+      <div class="seg" role="group" aria-label="Rank by">${Object.entries(RANK_BY).map(([k, [l]]) => `<button data-rank="${k}" aria-pressed="${a.rankBy === k}">${l}</button>`).join("")}</div>
+      <div class="legend">${Object.entries(GROUP_COLORS).map(([g2, col]) => `<span><i class="box" style="background:${col}"></i>${g2}</span>`).join("")}<span><i style="background:var(--ink)"></i>flat panel, same felt and kg</span></div></div>
+      <div class="chart-scroll">${rankChart(rows)}</div><p class="hint">${{ piece: "Absorption per piece in m² (Sabine), weighted for your target; the black tick is a flat panel of the same felt and kg. Big, heavy pieces win here.", kg: "Absorption for each kg of felt: how efficiently the shape uses its material.", panel: "How many times a flat 50 mm panel of the same felt and kg: the effect of the shape alone (dashed line = no better than a panel)." }[a.rankBy]} Click a bar to see the piece.</p></div>
+    <div class="card"><div class="card-head"><h3>Absorption against weight</h3><span class="hint">Above the dashed line a shape beats a flat panel of the same felt and weight</span></div><div class="chart-scroll">${massChart(rows)}</div></div>
+    <div class="card"><h3>By pitch</h3><div class="table-wrap"><table><thead><tr><th>Structure</th><th>How it absorbs</th><th>250 · 500 · 1k Hz</th><th class="num">250 Hz</th><th class="num">500 Hz</th><th class="num">1 kHz</th><th class="num">Felt</th><th class="num">m² per kg</th><th class="num">vs panel</th><th>Best for</th></tr></thead><tbody>
+      ${(() => { const mx = Math.max(0.05, ...rows.map((r) => Math.max(...r.area))); return rows.map((r) => `<tr class="${a.sel === r.key ? "current" : ""}" data-atlas="${esc(r.key)}"><td><i class="dot" style="background:${GROUP_COLORS[r.group]}"></i>${esc(r.name)}</td><td>${esc(MECH[r.rule || r.key] ? MECH[r.rule || r.key][0] : "")}</td><td>${miniBars(r.area, mx)}</td>
+        ${r.area.map((x) => `<td class="num">${fix(x, 2)}</td>`).join("")}<td class="num">${fix(r.mass, 1)} kg</td><td class="num">${r.mass > 1e-3 ? fix(r.score / r.mass, 2) : "–"}</td><td class="num">${r.bs > 1e-4 ? fix(r.score / r.bs, 1) + "×" : "–"}</td><td>${bestFor(r.area)}</td></tr>`).join(""); })()}
+      </tbody></table></div>
+      <p class="hint">Structures go through the wave simulator (250 to 1000 Hz), which reads about 25% low for all of them alike. Surface textures use the more exact layer model, so next to structures they are slightly favoured; their full curve is below. A neutral genome ignores the felt budget, so some pieces are heavy: compare per kg or versus a panel too.</p></div>
+    ${rows.some((r) => r.alpha) ? `<div class="card"><h3>Surface textures over the full range (per m² of face)</h3><div class="chart-scroll">${lineChart(rows.filter((r) => r.alpha).map((r, i) => ({ label: r.name, color: MAT_COLORS[i % MAT_COLORS.length], alpha: r.alpha })), { yMax: rows.some((r) => r.key === "cloud") ? 2 : 1, weights: E.bandWeights(state.target) })}</div>
+      <div class="legend">${rows.filter((r) => r.alpha).map((r, i) => `<span><i style="background:${MAT_COLORS[i % MAT_COLORS.length]}"></i>${esc(r.name)}</span>`).join("")}</div></div>` : ""}`}`;
+  if (sel) {
+    FormView.show($("#fv-slot"), sel.form);
+    $("#atlas-open").onclick = () => {
+      const rule = sel.rule || sel.key;
+      state.fMount = state.atlas.mount; state.allMounts = false; state.matPick = state.atlas.material;
+      if (sel.group === "My structures") state.formSel = sel.form.id; else { state.formSel = null; if (G.RULES[rule]) state.lab.genes[rule] = sel.form.genes.slice(); }
+      state.ws = "grow"; setTool(rule); renderAll();
+    };
+  }
+}
+$("#canvas").addEventListener("click", (e) => { const rb = e.target.closest("[data-rank]"); if (rb && state.ws === "atlas") { state.atlas.rankBy = rb.dataset.rank; renderCanvas(); renderDock(); return; } const t = e.target.closest("[data-atlas]"); if (t && state.ws === "atlas") { state.atlas.sel = t.dataset.atlas; renderCanvas(); renderDock(); $("#canvas").scrollTo({ top: 0, behavior: "smooth" }); } });
+function atlasBar(ob) {
+  const a = state.atlas;
+  ob.innerHTML = `<div class="opt"><div class="segd" role="group" aria-label="Where the pieces go">${[["standing", "Floor"], ["wall", "Wall"], ["hanging", "Ceiling"]].map(([k, l]) => `<button data-atlas-mount="${k}" aria-pressed="${a.mount === k}">${l}</button>`).join("")}</div></div>
+    <span class="divider"></span>${targetSelect()}<span class="divider"></span>
+    <div class="opt"><label for="atlas-mat">Felt</label><select id="atlas-mat">${GROUP_ORDER.map((g) => `<optgroup label="${g}">${Object.entries(E.FELTS).filter(([, m]) => m.group === g).map(([k, m]) => `<option value="${k}" ${a.material === k ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</optgroup>`).join("")}</select></div>
+    <span class="spacer"></span><button class="btn primary" id="atlas-measure" ${a.busy ? "disabled" : ""}>${a.busy ? "Measuring…" : a.rows ? "Measure again" : "Measure all"}</button>`;
+  $$("[data-atlas-mount]").forEach((b) => b.onclick = () => { a.mount = b.dataset.atlasMount; renderOptbar(); renderCanvas(); });
+  $("#atlas-mat").onchange = (e) => { a.material = e.target.value; renderCanvas(); };
+  $("#target").onchange = (e) => { state.target = e.target.value; renderCanvas(); renderStatus(); };
+  $("#atlas-measure").onclick = measureAtlas;
+}
+function atlasPanel() {
+  const rows = atlasRows(), groups = {};
+  for (const r of rows) (groups[r.group] = groups[r.group] || []).push(r);
+  return `<details class="panel" open id="panel-atlas"><summary>What wins, and why</summary><div class="panel-body">
+    ${rows.length ? `<p class="hint">Best of each family, ${RANK_BY[state.atlas.rankBy][0].toLowerCase()}:</p>` + Object.entries(groups).map(([g, list]) => `<p><i class="dot" style="background:${GROUP_COLORS[g]}"></i><strong>${g}</strong>: ${esc(list[0].name)}, ${fix(list[0].score, 2)} m² from ${fix(list[0].mass, 1)} kg${list[0].bs > 1e-4 ? ` (${fix(list[0].score / list[0].bs, 1)}× a panel)` : ""}.</p>`).join("")
+      + `<p class="hint">With a neutral genome. Grown and evolved versions do better: use these as a map of where to start.</p>` : '<p class="hint">Measure to compare. Change the place (floor, wall, ceiling), the felt or what to quiet and measure again: the ranking changes.</p>'}</div></details>`;
+}
 // ------------------------------------------------------- surface pieces ----
 // Surface textures as freestanding pieces: the texture grows on both faces of a thin rigid core
 // (a double-sided screen on two sled feet), or as a hanging slab for the hanging cloud. Their
@@ -4915,6 +5116,11 @@ function renderStatus() {
       <span>${state.allMounts ? "wall, ceiling and floor" : MOUNT_NAME[state.fMount].toLowerCase()}</span><span class="mono">${fix(state.fSize, 1)} m · ${state.fBudget} kg</span><span>${state.matPick === "auto" ? `best of ${state.porous.size} materials` : esc(E.FELTS[state.matPick].name)}</span><span>Wave simulator: 2D slices at 250, 500 and 1000 Hz</span>`;
     return;
   }
+  if (state.ws === "atlas") {
+    const a = state.atlas;
+    s.innerHTML = `<span>Structures</span><span>${MOUNT_NAME[a.mount].toLowerCase()}</span><span>${esc(E.FELTS[a.material].name)}</span><span class="mono">${fix(state.fSize, 1)} m · ${state.fBudget} kg</span><span>${a.rows ? `${atlasRows().length} measured` : "not measured yet"}</span><span>Wave simulator: 2D slices at 250, 500 and 1000 Hz</span>`;
+    return;
+  }
   if (state.ws === "spaces") {
     const sp = curSpace();
     s.innerHTML = sp ? `<span>${esc(sp.name)}</span><span class="mono">${fix(spaceVolume(sp), 0)} m³</span><span>Model: statistical (Sabine) reverberation, for comparing options</span>` : "<span>No space selected</span>";
@@ -4931,6 +5137,8 @@ const TIPS = {
     chips: ["Why did this shape win?", "How deep should it be?", "How would I make it?"] },
   forms: { text: "Pick the <strong>room</strong>, where it goes (<strong>floor, wall, ceiling</strong> or all 3) and a <strong>generator</strong> in the toolbar. Each one opens as a <strong>graph</strong>: drag values and watch it regrow, lock what you like, then <strong>Test</strong> or <strong>Evolve</strong>, and <strong>Place in this room</strong>.",
     chips: ["Which form works best?", "What is Biothing, simply?", "How would I make this form?"] },
+  atlas: { text: "Every structure and surface measured the same way. Pick the place (<strong>floor, wall, ceiling</strong>), the felt and what to quiet, press <strong>Measure all</strong>, then click a bar to see the piece and why it absorbs.",
+    chips: ["Why do open sheets beat a solid block?", "Which shape for low pitches?", "Why don't printed lattices absorb?"] },
   materials: { text: "Tick the materials you like. The chart shows each one as a plain flat layer, so you see the material before any shaping.",
     chips: ["Which material is best for me?", "Explain the chart", "Which are the most natural?"] },
   spaces: { text: "Add your exhibition areas (or import a 3D model), set the finishes and visitors, then place grown shapes. Aim for the <strong>recommended</strong> echo.",
@@ -4943,7 +5151,7 @@ function renderGuideTip() {
 }
 document.addEventListener("click", (e) => { const c = e.target.closest("[data-ask]"); if (c) ask(c.dataset.ask); });
 
-const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing): all of them in one Structures workspace: surface textures (panel-like families) and free objects. The product must be freestanding: standing forms grow a holdfast (splayed roots or a plinth) and must lean 10 degrees before toppling. Forms come from natural rules (branching tree, snow crystal, folding coral, spiral shell, foam) or sheet hybrids (felt sheets arranged as a leaf canopy, mushroom gills, pine cone or twisted lamellae), or the Sound-grown membrane after Biothing's Genware (a sound source, either the target sound, an uploaded recording or a room's resonances, becomes a field of air motion; a cellular felt membrane grows denser where air moves most and the field is updated by what has grown over three rounds). A seed library keeps genomes the designer likes and starts new growth from them (after Malafouris's essay on Genware as a "library of seeds" changed by what grows); it can be saved and loaded at the next venue. Further ideas from Andrasek's AA lecture "Material Potency": the Interference cut-sheet (after her New Museum ceiling, where wave interference was cut into flat laser-cut sheets that gravity bent into 3D): one flat felt sheet with three-sided flap cuts, larger and more open where the room's sound field is strong; each flap sags under its own weight depending on the felt's density and thickness (top hinges sag, side hinges hold), and it exports an SVG cut file. "Grow a speech skin": a second, finer growth of felt tufts on a grown form, drawn by the speech-band sound (one behaviour grown on another, like her tower and its skin). "Grow 6 variants": a family whose genes move within brackets of elasticity around the parent, all different but one nature, like dunes in one desert. "Where pieces help most": a probability map of the room plan (low pitches: room standing waves at ear height, since felt works where air moves; speech: a band 0.4-1.6 m from the walls) from which layouts A, B, C are drawn by chance, after her tower project's probabilistic programme. Positions do not change the Sabine echo numbers. Every generator can grow for a wall (pressed into a relief, tested against the wall), the ceiling or the floor, or all three in one run; seeds are kept per place. Every single generator opens as a graph like Grasshopper or nTop: nodes Seed and place (mount, size, random seed), Field (from sound: target sound, recording, room resonances; or drawn: attractor point, gradient, rings, two interfering waves, noise), the rule's own values grouped as Cell / Response to the field / Holdfast, Material, and Evolve (population, generations, mutation, start from seeds). Each value can be dragged (live 3D preview), locked, or given a range for evolution; Test runs the wave simulator on the exact form; Keep adds it; Watch it grow replays the order it grew in. Pattern and lattice generators: Voronoi cells (open cells, funnels, stepped web), Felt petals on sunflower spirals, Slotted felt strips (egg-crate with a strip cut file), Strut lattice (cubic, body-centred, octet, diamond, honeycomb; printed, graded, wavy, felt balls in cells), Minimal surface TPMS (gyroid, Schwarz P, diamond; printed shell with felt in one labyrinth), Spatial lattice (a printed lattice filling a column-into-canopy or a cloud, like Biothing's robotically printed pergola), Cellular automata (3D neighbour rules over generations: coral, sponge, crystal), Liquid bioform (blended blobs, or pulls stretched out of a slab after Ross Lovegrove's Liquid Table Bioform, as a heat-formed felt shell with holes). Printed struts and shells barely absorb because their gaps are far too big to rub the air; felt does the absorbing. When asked about Biothing, explain simply: grow, don't draw; simple local rules give rich results; differentiation within one nature; material computation; the environment steers growth; a garden of seeds; the designer guides like a gardener. Everything is tested in a 2D wave simulator that reads about 25% conservative. Everything happens in one Studio mode around the selected room (a ready-made room or the user's OBJ model): it is shown in 3D, structures are grown and placed in it, and its echo and crowd noise update. The target "This room's needs" weights each pitch by how much the room rings too long there. A Materials tab compares materials. The person is a designer, not an acoustic engineer.
+const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing): all of them in one Structures workspace: surface textures (panel-like families) and free objects. The product must be freestanding: standing forms grow a holdfast (splayed roots or a plinth) and must lean 10 degrees before toppling. Forms come from natural rules (branching tree, snow crystal, folding coral, spiral shell, foam) or sheet hybrids (felt sheets arranged as a leaf canopy, mushroom gills, pine cone or twisted lamellae), or the Sound-grown membrane after Biothing's Genware (a sound source, either the target sound, an uploaded recording or a room's resonances, becomes a field of air motion; a cellular felt membrane grows denser where air moves most and the field is updated by what has grown over three rounds). A seed library keeps genomes the designer likes and starts new growth from them (after Malafouris's essay on Genware as a "library of seeds" changed by what grows); it can be saved and loaded at the next venue. Further ideas from Andrasek's AA lecture "Material Potency": the Interference cut-sheet (after her New Museum ceiling, where wave interference was cut into flat laser-cut sheets that gravity bent into 3D): one flat felt sheet with three-sided flap cuts, larger and more open where the room's sound field is strong; each flap sags under its own weight depending on the felt's density and thickness (top hinges sag, side hinges hold), and it exports an SVG cut file. "Grow a speech skin": a second, finer growth of felt tufts on a grown form, drawn by the speech-band sound (one behaviour grown on another, like her tower and its skin). "Grow 6 variants": a family whose genes move within brackets of elasticity around the parent, all different but one nature, like dunes in one desert. "Where pieces help most": a probability map of the room plan (low pitches: room standing waves at ear height, since felt works where air moves; speech: a band 0.4-1.6 m from the walls) from which layouts A, B, C are drawn by chance, after her tower project's probabilistic programme. Positions do not change the Sabine echo numbers. Every generator can grow for a wall (pressed into a relief, tested against the wall), the ceiling or the floor, or all three in one run; seeds are kept per place. Every single generator opens as a graph like Grasshopper or nTop: nodes Seed and place (mount, size, random seed), Field (from sound: target sound, recording, room resonances; or drawn: attractor point, gradient, rings, two interfering waves, noise), the rule's own values grouped as Cell / Response to the field / Holdfast, Material, and Evolve (population, generations, mutation, start from seeds). Each value can be dragged (live 3D preview), locked, or given a range for evolution; Test runs the wave simulator on the exact form; Keep adds it; Watch it grow replays the order it grew in. Pattern and lattice generators: Voronoi cells (open cells, funnels, stepped web), Felt petals on sunflower spirals, Slotted felt strips (egg-crate with a strip cut file), Strut lattice (cubic, body-centred, octet, diamond, honeycomb; printed, graded, wavy, felt balls in cells), Minimal surface TPMS (gyroid, Schwarz P, diamond; printed shell with felt in one labyrinth), Spatial lattice (a printed lattice filling a column-into-canopy or a cloud, like Biothing's robotically printed pergola), Cellular automata (3D neighbour rules over generations: coral, sponge, crystal), Liquid bioform (blended blobs, or pulls stretched out of a slab after Ross Lovegrove's Liquid Table Bioform, as a heat-formed felt shell with holes). Printed struts and shells barely absorb because their gaps are far too big to rub the air; felt does the absorbing. A third tab, Structures, measures every surface texture and growth rule the same way (same size, felt, place and budget, a neutral genome with every value in the middle, an even field), ranks them for the target, plots absorption against felt weight with the flat-panel line, lists absorption at 250/500/1000 Hz, m2 per kg, times a panel and what each is best for, and explains the mechanism of each (friction in pores, graded porosity, depth and cavities, air gaps, resonators, felt in free air, edges and open sheets, felt in a printed frame, shells with holes, fibre mats). When asked about Biothing, explain simply: grow, don't draw; simple local rules give rich results; differentiation within one nature; material computation; the environment steers growth; a garden of seeds; the designer guides like a gardener. Everything is tested in a 2D wave simulator that reads about 25% conservative. Everything happens in one Studio mode around the selected room (a ready-made room or the user's OBJ model): it is shown in 3D, structures are grown and placed in it, and its echo and crowd noise update. The target "This room's needs" weights each pitch by how much the room rings too long there. A Materials tab compares materials. The person is a designer, not an acoustic engineer.
 How to answer:
 - Simple, everyday words; explain any technical word in a few words the first time.
 - Short: at most about 120 words unless asked for more. Short paragraphs or a few bullets.
@@ -4964,6 +5172,7 @@ function pageState() {
     if (f.skin) lines.push(`  "${f.name}" has a speech skin of ${f.skinCount} felt tufts`);
     if (state.families[f.id]) lines.push(`  "${f.name}" has a family of ${state.families[f.id].ids.length} variants (±${Math.round(state.families[f.id].elasticity * 100)}%)`);
   }
+  if (state.ws === "atlas" && state.atlas.rows) lines.push(`Structures comparison (${MOUNT_NAME[state.atlas.mount]}, ${E.FELTS[state.atlas.material].name}, neutral genomes, m2 per piece weighted for the target): ${atlasRows().map((r) => `${r.name} ${fix(r.score, 2)}${r.bs > 1e-4 ? ` (${fix(r.score / r.bs, 1)}x panel)` : ""}`).join("; ")}${state.atlas.sel ? `; selected ${state.atlas.sel}` : ""}`);
   const lsp = curSpace(), lay = lsp && roomLayout(lsp);
   if (lay && lay.spots.length) lines.push(`Room layout ${"ABC"[lsp.layoutOpt || 0]} in ${lsp.name}: ${lay.spots.length} pieces placed from the probability map, ${fix(lay.gain, 2)}x better spots than an even spread`);
   if (state.ranking) lines.push(`Material ranking for ${E.FAMILY[state.ranking.family].name}: ${state.ranking.rows.map((r) => `${E.FELTS[r.params.porous].name} ${pct(r.score)}`).join(", ")}`);
@@ -5021,8 +5230,9 @@ const TOUR = [
   { ws: "grow", tool: "all", sel: "#panel-absorbers", title: "7. Place in the room", text: "Open a grown structure and press “Place in this room”: the lab adds as many pieces as the room needs and the 3D view and echo update." },
   { ws: "grow", tool: "membrane", sel: "#panel-sound", title: "8. Sound draws the form", text: "After Biothing's Genware: the room's own resonances (or a recording) can grow a membrane, or cut the flaps of an interference cut-sheet." },
   { ws: "grow", tool: "all", sel: "#room-map-card", title: "9. Where pieces go", text: "A map of the room shows where pieces help most. Layouts A, B and C are drawn from it by chance: proposals to choose from." },
-  { ws: "materials", sel: "#panel-materials", title: "10. Materials library", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
-  { ws: "grow", tool: "all", sel: "#panel-guide", title: "11. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
+  { ws: "atlas", sel: "#tab-atlas", title: "10. Compare structures", text: "Every structure and surface measured the same way, ranked for what you want to quiet, with why each one absorbs." },
+  { ws: "materials", sel: "#panel-materials", title: "11. Materials library", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
+  { ws: "grow", tool: "all", sel: "#panel-guide", title: "12. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
 ];
 let tourAt = -1;
 function tour(i) {

@@ -82,6 +82,11 @@ one-person module mass, flat-pack transport and reuse across many events.
   slab, as a heat-formed felt shell with holes) and agent fibres (a flocking swarm whose trails become
   a mat of soft cords with hooked tufts). Printed struts and shells barely absorb (their gaps are far
   too big to rub the air), so lattices carry felt; every form also exports a 1:1 front drawing (SVG).
+- **Structures** (third tab): every surface texture and growth rule measured the same way (same
+  size, felt, place and budget, a neutral genome, an even field) for the floor, a wall or the ceiling.
+  Ranked per piece, per kg of felt or against a flat panel, plotted against felt weight, listed by
+  pitch, and explained by mechanism (friction in pores, graded porosity, depth and cavities, air gaps,
+  resonators, felt in free air, open sheets and edges, felt in a printed frame, shells, fibre mats).
 - **Spaces**: exhibition areas as 3D models (ready-made rooms, or your own `.obj` exports).
   Set the finishes and visitor count, place grown shapes, and compare reverberation time
   with the recommended value and the drop in crowd noise.
