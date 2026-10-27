@@ -76,6 +76,17 @@
   const sheetT = (u) => lerp(0.015, 0.08, u);
   const mmT = (u) => Math.round(sheetT(u) * 1000) + " mm";
   const isSheet = (p) => p.c !== undefined;
+  const isTri = (p) => p.tri !== undefined;
+  // Apply an affine point map to every part (sheets: centre and edge vectors; triangles: corners).
+  function mapParts(parts, fn) {
+    const out = parts.map((p) => {
+      if (isTri(p)) return { ...p, tri: p.tri.map(fn) };
+      if (isSheet(p)) { const c = fn(p.c); return { ...p, c, u: sub(fn(add(p.c, p.u)), c), v: sub(fn(add(p.c, p.v)), c) }; }
+      return { ...p, a: fn(p.a), b: fn(p.b) };
+    });
+    for (const k of ["label", "field", "cutPlan", "stripPlan"]) if (parts[k] !== undefined) out[k] = parts[k];
+    return out;
+  }
 
   const RULES = {
     tree: {
@@ -428,6 +439,614 @@
     },
   };
 
+  // ======================================================= pattern lab ======
+  // Generators for modules that can go on a wall, hang from the ceiling or stand on the floor, with a
+  // parameter schema (`params`) so the designer can drive every value by hand, lock it, or give
+  // evolution a range to explore (a graph like Grasshopper or nTop). All are graded by a field.
+  // Geometry is built in a "wall frame": the face is x (across, centred) by z (up, 0..Hm), the depth
+  // grows out along +y from y = 0. mountPattern then puts it on the wall, the ceiling or the floor.
+  const opt = (label, options, node) => ({ label, options, node });
+  const num = (label, min, max, unit, node, round) => ({ label, min, max, unit, node, round });
+  function paramValue(rule, g, i) {
+    const p = RULES[rule].params[i], x = Math.max(0, Math.min(1, g[i]));
+    if (p.options) return Math.min(p.options.length - 1, Math.floor(x * p.options.length));
+    const v = lerp(p.min, p.max, x);
+    return p.round ? Math.round(v) : v;
+  }
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  function frameOf(env, mount) {
+    const W = env.width, Hm = mount === "standing" ? env.height - 0.1 : mount === "hanging" ? env.width : env.height;
+    return { W, Hm };
+  }
+  function fieldFn(field, W, Hm, gamma) {
+    const F = field || flatField;
+    return (x, z) => Math.pow(clamp01(sampleField(F.data, F.nx, F.nz, x / W + 0.5, z / Hm)), gamma);
+  }
+  function mountPattern(parts, mount, { W, Hm, depth, mirror = true, feet = 2, footLen = 0.3 }) {
+    if (mount === "wall") {
+      parts.push({ c: [0, -0.006, Hm * 0.75], u: [W * 0.4, 0, 0], v: [0, 0, 0.04], t: 0.012, structure: true });
+      parts.label = "a wall cleat behind";
+      return parts;
+    }
+    if (mount === "hanging") {
+      const drop = 0.25, out = mapParts(parts, (q) => [q[0], q[2] - Hm / 2, -drop - q[1]]);
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) out.push({ a: [(sx * W) / 3, (sy * Hm) / 3, 0], b: [(sx * W) / 3, (sy * Hm) / 3, -drop], r: 0.003, structure: true });
+      out.label = "4 hanging cables";
+      return out;
+    }
+    let out = mirror ? mapParts(parts, (q) => [q[0], q[1] + 0.0045, q[2]]) : mapParts(parts, (q) => [q[0], q[1] - depth / 2, q[2]]);
+    if (mirror) out = out.concat(mapParts(out, (q) => [q[0], -q[1], q[2]]));
+    out = mapParts(out, (q) => [q[0], q[1], q[2] + 0.1]);
+    if (mirror) out.push({ c: [0, 0, 0.1 + Hm / 2], u: [W / 2, 0, 0], v: [0, 0, Hm / 2], t: 0.009, structure: true });
+    out.label = footings(out, planCurve(0, 0, W), W, Hm + 0.1, feet, footLen, false);
+    return out;
+  }
+  // Cell boundaries along a length, each cell as large as sizeAt(fraction) says, stretched to fit exactly.
+  function warp1D(len, sizeAt) {
+    const b = [0];
+    let x = 0;
+    while (x < len - 1e-9 && b.length < 400) { x += Math.max(0.01, sizeAt(Math.min(1, x / len))); b.push(x); }
+    if (b.length < 2) b.push(len);
+    const k = len / b[b.length - 1];
+    return b.map((v) => v * k);
+  }
+  const atWarp = (b, u) => { const i = Math.max(0, Math.min(b.length - 2, Math.floor(u))); return b[i] + (b[i + 1] - b[i]) * (u - i); };
+  const invWarp = (b, x) => { let i = 0; while (i < b.length - 2 && b[i + 1] < x) i++; return i + (x - b[i]) / (b[i + 1] - b[i] || 1); };
+
+  // 2D Voronoi cells in a rectangle (half-plane clipping, nearest seeds first).
+  function clipPoly(poly, nx, nz, c) {
+    const out = [];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length], da = nx * a[0] + nz * a[1] - c, db = nx * b[0] + nz * b[1] - c;
+      if (da <= 0) out.push(a);
+      if ((da < 0) !== (db < 0) && da !== db) { const t = da / (da - db); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]); }
+    }
+    return out;
+  }
+  function voronoiCells(pts, x0, x1, z0, z1) {
+    return pts.map((p, i) => {
+      let poly = [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
+      const others = pts.map((q, j) => [j, (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2]).filter(([j]) => j !== i).sort((a, b) => a[1] - b[1]);
+      for (const [j, d2] of others) {
+        let R2 = 0;
+        for (const v of poly) R2 = Math.max(R2, (v[0] - p[0]) ** 2 + (v[1] - p[1]) ** 2);
+        if (d2 > 4 * R2) break;
+        const q = pts[j];
+        poly = clipPoly(poly, q[0] - p[0], q[1] - p[1], (q[0] * q[0] + q[1] * q[1] - p[0] * p[0] - p[1] * p[1]) / 2);
+        if (poly.length < 3) break;
+      }
+      return poly;
+    });
+  }
+  // Seeds over the face: relaxed (spacing follows the field), honeycomb (graded hex rows) or a sunflower spiral.
+  function faceSeeds(kind, W, Hm, sizeAt, rand) {
+    const pts = [], inRect = (x, z) => x > -W / 2 && x < W / 2 && z > 0 && z < Hm;
+    if (kind === 1) {
+      const rows = warp1D(Hm, (v) => sizeAt(0, v * Hm) * 0.87);
+      rows.forEach((z, j) => {
+        if (j === rows.length - 1) return;
+        const zc = (z + rows[j + 1]) / 2, cols = warp1D(W, (u) => sizeAt(-W / 2 + u * W, zc));
+        for (let i = 0; i < cols.length - 1; i++) { const x = -W / 2 + (cols[i] + cols[i + 1]) / 2 + (j % 2 ? (cols[i + 1] - cols[i]) / 2 : 0); if (inRect(x, zc)) pts.push([x, zc]); }
+      });
+      return pts;
+    }
+    if (kind === 2) {
+      const golden = Math.PI * (3 - Math.sqrt(5)), cx = 0, cz = Hm / 2;
+      let A = 0;
+      for (let k = 0; k < 600; k++) {
+        const r = Math.sqrt(A / Math.PI), th = k * golden, x = cx + r * Math.cos(th), z = cz + r * Math.sin(th);
+        if (r > Math.hypot(W, Hm) / 2) break;
+        const s = sizeAt(Math.max(-W / 2, Math.min(W / 2, x)), Math.max(0, Math.min(Hm, z)));
+        A += s * s * 0.9;
+        if (inRect(x, z)) pts.push([x, z]);
+      }
+      return pts;
+    }
+    for (let t = 0; t < 5000 && pts.length < 400; t++) {
+      const x = (rand() - 0.5) * W, z = rand() * Hm, s = sizeAt(x, z);
+      if (pts.every((q) => Math.hypot(q[0] - x, q[1] - z) > s * 0.5 + sizeAt(q[0], q[1]) * 0.5)) pts.push([x, z]);
+    }
+    return pts;
+  }
+  // A face quad (parallelogram) through four points given in (x, y, z), as a sheet of thickness t.
+  const quad = (A, B, C, D, t, extra) => ({ c: mul(add(add(A, B), add(C, D)), 0.25), u: mul(add(sub(B, A), sub(C, D)), 0.25), v: mul(add(sub(D, A), sub(C, B)), 0.25), t, ...extra });
+
+  // Unit cells of strut lattices as bonds in the unit cube.
+  const UNIT = (() => {
+    const corners = [];
+    for (const a of [0, 1]) for (const b of [0, 1]) for (const c of [0, 1]) corners.push([a, b, c]);
+    const faces = [[0.5, 0.5, 0], [0.5, 0.5, 1], [0.5, 0, 0.5], [0.5, 1, 0.5], [0, 0.5, 0.5], [1, 0.5, 0.5]];
+    const make = (pts, L) => { const out = []; for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) if (Math.abs(Math.hypot(...sub(pts[i], pts[j])) - L) < 1e-6) out.push([pts[i], pts[j]]); return out; };
+    return [make(corners, 1), make([...corners, [0.5, 0.5, 0.5]], Math.sqrt(3) / 2), make([...corners, ...faces], Math.SQRT1_2),
+      make([...corners, ...faces, [0.25, 0.25, 0.25], [0.25, 0.75, 0.75], [0.75, 0.25, 0.75], [0.75, 0.75, 0.25]], Math.sqrt(3) / 4)];
+  })();
+  // Struts of a lattice on warped cells. map(u, v, w) gives a point in metres from cell coordinates;
+  // keep(p) can drop struts (an envelope); radius(p) grades them. Type 4 is a honeycomb with rungs.
+  function latticeStruts(type, nu, nv, nw, map, keep, radius) {
+    const seen = new Set(), out = [], key = (p) => p.map((x) => Math.round(x * 4)).join(",");
+    const strut = (P, Q) => {
+      const k1 = key(P), k2 = key(Q), k = k1 < k2 ? k1 + "|" + k2 : k2 + "|" + k1;
+      if (seen.has(k)) return;
+      seen.add(k);
+      const a = map(...P), b = map(...Q);
+      if (keep && (!keep(a) || !keep(b))) return;
+      out.push({ a, b, r: radius(mul(add(a, b), 0.5)), structure: true });
+    };
+    if (type === 4) {
+      const s3 = Math.sqrt(3), verts = new Map();
+      for (let j = -1; j <= Math.ceil(nw / 1.5) + 1; j++) for (let i = -1; i <= Math.ceil(nu / s3) + 1; i++) {
+        const cx = s3 * (i + (j & 1) / 2), cz = 1.5 * j;
+        for (let e = 0; e < 6; e++) {
+          const a1 = Math.PI / 6 + (e * Math.PI) / 3, a2 = a1 + Math.PI / 3;
+          const p = [(cx + Math.cos(a1)) / s3 * 1, (cz + Math.sin(a1)) / 1.5], q = [(cx + Math.cos(a2)) / s3, (cz + Math.sin(a2)) / 1.5];
+          if ([p, q].some(([u, w]) => u < -1e-6 || u > nu + 1e-6 || w < -1e-6 || w > nw + 1e-6)) continue;
+          for (let v = 0; v <= nv; v++) strut([p[0], v, p[1]], [q[0], v, q[1]]);
+          verts.set(key([p[0], 0, p[1]]), p);
+        }
+      }
+      for (const p of verts.values()) for (let v = 0; v < nv; v++) strut([p[0], v, p[1]], [p[0], v + 1, p[1]]);
+      return out;
+    }
+    const bonds = UNIT[type];
+    for (let k = 0; k < nw; k++) for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) for (const [A, B] of bonds) strut([i + A[0], j + A[1], k + A[2]], [i + B[0], j + B[1], k + B[2]]);
+    return out;
+  }
+  // Triply periodic minimal surfaces (value 0 is the surface) and their largest value, in cell coordinates.
+  const TPMS = [
+    { f: (X, Y, Z) => Math.sin(X) * Math.cos(Y) + Math.sin(Y) * Math.cos(Z) + Math.sin(Z) * Math.cos(X), max: 1.5 },
+    { f: (X, Y, Z) => Math.cos(X) + Math.cos(Y) + Math.cos(Z), max: 3 },
+    { f: (X, Y, Z) => Math.sin(X) * Math.sin(Y) * Math.sin(Z) + Math.sin(X) * Math.cos(Y) * Math.cos(Z) + Math.cos(X) * Math.sin(Y) * Math.cos(Z) + Math.cos(X) * Math.cos(Y) * Math.sin(Z), max: 1.42 },
+  ];
+  // Marching tetrahedra over a grid: triangles of the surface value(x, y, z) = 0.
+  function isoTriangles(value, x0, y0, z0, hx, hy, hz, nx, ny, nz, keepTri) {
+    const V = new Float32Array((nx + 1) * (ny + 1) * (nz + 1)), id = (i, j, k) => i + (nx + 1) * (j + (ny + 1) * k), P = (i, j, k) => [x0 + i * hx, y0 + j * hy, z0 + k * hz];
+    for (let k = 0; k <= nz; k++) for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) V[id(i, j, k)] = value(...P(i, j, k));
+    const C = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]];
+    const TETS = [[0, 5, 1, 6], [0, 1, 2, 6], [0, 2, 3, 6], [0, 3, 7, 6], [0, 7, 4, 6], [0, 4, 5, 6]], out = [];
+    const cut = (pa, va, pb, vb) => { const t = va / (va - vb); return [pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t, pa[2] + (pb[2] - pa[2]) * t]; };
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const cv = C.map((c) => V[id(i + c[0], j + c[1], k + c[2])]);
+      if (cv.every((v) => v < 0) || cv.every((v) => v >= 0)) continue;
+      const cp = C.map((c) => P(i + c[0], j + c[1], k + c[2]));
+      for (const T of TETS) {
+        const ins = T.filter((q) => cv[q] < 0), outs = T.filter((q) => cv[q] >= 0);
+        if (!ins.length || !outs.length) continue;
+        if (ins.length === 1 || outs.length === 1) {
+          const lone = ins.length === 1 ? ins[0] : outs[0], rest = ins.length === 1 ? outs : ins;
+          out.push(rest.map((q) => cut(cp[lone], cv[lone], cp[q], cv[q])));
+        } else {
+          const [a, b] = ins, [c, d] = outs, p1 = cut(cp[a], cv[a], cp[c], cv[c]), p2 = cut(cp[a], cv[a], cp[d], cv[d]), p3 = cut(cp[b], cv[b], cp[d], cv[d]), p4 = cut(cp[b], cv[b], cp[c], cv[c]);
+          out.push([p1, p2, p3], [p1, p3, p4]);
+        }
+      }
+    }
+    return keepTri ? out.filter(keepTri) : out;
+  }
+
+  const CELL = "Cell", RESP = "Response to the field", HOLD = "Holdfast (freestanding)";
+  const holdParams = [opt("Feet", ["2 feet", "3 feet", "4 feet"], HOLD), num("Foot length", 0.15, 0.45, "cm", HOLD)];
+  const LAB = {
+    voronoi: {
+      group: "pattern", lab: true, direct: true, mounts: true, name: "Voronoi cells", imitates: "cracked mud, giraffe skin, dragonfly wings, foam, the cells of plant tissue",
+      idea: "The face is divided into cells, each the area closest to one seed. Where sound is strong the cells grow smaller and deeper, so there are more felt walls and edges there.",
+      params: [opt("Seeds", ["relaxed", "honeycomb", "sunflower spiral"], CELL), opt("Style", ["open cells", "funnels", "stepped web"], CELL),
+        num("Cell size where sound is strong", 0.05, 0.2, "cm", RESP), num("Cell size where calm", 0.12, 0.4, "cm", RESP),
+        num("Depth where calm", 0.02, 0.15, "cm", RESP), num("Depth where sound is strong", 0.05, 0.3, "cm", RESP),
+        num("Opening (funnel or web hole)", 0.1, 0.8, "%", CELL), num("Felt thickness", 0.005, 0.02, "mm", CELL), opt("Back", ["open back", "felt back"], CELL),
+        num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) {
+        const v = (i) => paramValue("voronoi", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), rand = rng(seedOf(g));
+        const style = v(1), cMin = v(2), cMax = Math.max(v(2), v(3)), dLo = v(4), dHi = Math.min(ctx.env.depth || 0.3, Math.max(v(4), v(5))), open = v(6), t = v(7), f = fieldFn(ctx.field, W, Hm, v(9));
+        const sizeAt = (x, z) => lerp(cMax, cMin, f(x, z));
+        const seeds = faceSeeds(v(0), W, Hm, sizeAt, rand), cells = voronoiCells(seeds, -W / 2, W / 2, 0, Hm), parts = [];
+        const P3 = (q, y) => [q[0], y, q[1]];
+        const edges = new Map();
+        cells.forEach((poly, i) => {
+          if (poly.length < 3) return;
+          const s = seeds[i], fi = f(s[0], s[1]), d = lerp(dLo, dHi, fi), n = poly.length;
+          const hole = poly.map((q) => [s[0] + (q[0] - s[0]) * open, s[1] + (q[1] - s[1]) * open]);
+          for (let e = 0; e < n; e++) {
+            const a = poly[e], b = poly[(e + 1) % n];
+            if (style === 0) {
+              const k = [a, b].map((q) => q.map((x) => Math.round(x * 2000)).join(",")).sort().join("|");
+              if (!edges.has(k) || edges.get(k).d < d) edges.set(k, { a, b, d });
+            } else if (style === 1) parts.push(quad(P3(hole[e], 0), P3(hole[(e + 1) % n], 0), P3(b, d), P3(a, d), t));
+            else for (let L = 0; L < 3; L++) {
+              const sc = 1 - ((1 - open) * (L + 1)) / 3, hA = [s[0] + (a[0] - s[0]) * sc, s[1] + (a[1] - s[1]) * sc], hB = [s[0] + (b[0] - s[0]) * sc, s[1] + (b[1] - s[1]) * sc];
+              const y = d * (1 - (L + 0.5) / 3);
+              parts.push(quad(P3(a, y), P3(b, y), P3(hB, y), P3(hA, y), d / 3));
+            }
+          }
+        });
+        for (const { a, b, d } of edges.values()) parts.push(quad(P3(a, 0), P3(b, 0), P3(b, d), P3(a, d), t));
+        if (v(8) === 1 || style === 1) parts.push({ c: [0, -t / 2, Hm / 2], u: [W / 2, 0, 0], v: [0, 0, Hm / 2], t });
+        return mountPattern(parts, mount, { W, Hm, depth: dHi, feet: 2 + v(10), footLen: v(11) });
+      },
+      describe(g) { const v = (i) => paramValue("voronoi", g, i); return `${["Relaxed", "Honeycomb", "Sunflower"][v(0)]} Voronoi ${["open cells", "funnels", "stepped web"][v(1)]}, cells ${Math.round(v(2) * 100)}-${Math.round(Math.max(v(2), v(3)) * 100)} cm, ${Math.round(v(4) * 100)}-${Math.round(Math.max(v(4), v(5)) * 100)} cm deep, ${Math.round(v(7) * 1000)} mm felt.`; },
+    },
+    petals: {
+      group: "pattern", lab: true, direct: true, mounts: true, name: "Felt petals", imitates: "sunflower heads, artichokes, succulents, scales of a cone",
+      idea: "Felt petals on sunflower spirals, larger towards the edge. Where sound is strong they open further out of the face, so both faces of every petal catch sound.",
+      params: [opt("Spiral centres", ["1 centre", "2 centres", "3 centres"], CELL), num("Petals", 60, 400, "", CELL, true),
+        num("Petal length at the centre", 0.04, 0.15, "cm", CELL), num("Petal length at the edge", 0.08, 0.3, "cm", CELL), num("Width / length", 0.3, 0.9, "%", CELL),
+        num("Opening where calm", 5, 45, "°", RESP), num("Opening where sound is strong", 30, 85, "°", RESP), num("Curl", 0, 60, "°", CELL),
+        num("Felt thickness", 0.003, 0.012, "mm", CELL), opt("Back", ["open back", "felt back"], CELL), num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) {
+        const v = (i) => paramValue("petals", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(10));
+        const nC = 1 + v(0), count = v(1), Lc = v(2), Le = Math.max(v(2), v(3)), ratio = v(4), oLo = v(5), oHi = Math.max(v(5), v(6)), curl = (v(7) * Math.PI) / 180, t = v(8);
+        // spiral centres at the strongest places of the field, kept apart
+        const cand = [];
+        for (let i = 0; i < 9; i++) for (let k = 0; k < 9; k++) { const x = -W / 2 + ((i + 0.5) / 9) * W, z = ((k + 0.5) / 9) * Hm; cand.push([x, z, f(x, z)]); }
+        cand.sort((a, b) => b[2] - a[2]);
+        const centres = [];
+        for (const c of cand) if (centres.length < nC && centres.every((q) => Math.hypot(q[0] - c[0], q[1] - c[1]) > Math.min(W, Hm) * 0.4)) centres.push(c);
+        const golden = Math.PI * (3 - Math.sqrt(5)), R = Math.hypot(W, Hm) / (2 * Math.sqrt(nC)), per = Math.ceil(count / nC), parts = [], depthMax = [0];
+        for (const C of centres) for (let k = 1; k <= per; k++) {
+          const fr = Math.sqrt(k / per), x = C[0] + R * fr * Math.cos(k * golden), z = C[1] + R * fr * Math.sin(k * golden);
+          if (x < -W / 2 || x > W / 2 || z < 0 || z > Hm) continue;
+          if (centres.some((o) => o !== C && Math.hypot(o[0] - x, o[1] - z) < Math.hypot(C[0] - x, C[1] - z))) continue;
+          const L = lerp(Lc, Le, fr), w = L * ratio, ang = ((lerp(oLo, oHi, f(x, z)) * Math.PI) / 180), dl = Math.hypot(x - C[0], z - C[1]) || 1;
+          const dir = [(x - C[0]) / dl, 0, (z - C[1]) / dl], side = [dir[2], 0, -dir[0]], Y = [0, 1, 0];
+          const e1 = add(mul(dir, Math.cos(ang)), mul(Y, Math.sin(ang))), a2 = Math.min(Math.PI * 0.95, ang + curl), e2 = add(mul(dir, Math.cos(a2)), mul(Y, Math.sin(a2)));
+          const p0 = [x, t, z], p1 = add(p0, mul(e1, L / 2));
+          parts.push({ c: add(p0, mul(e1, L / 4)), u: mul(e1, L / 4), v: mul(side, w / 2), t });
+          parts.push({ c: add(p1, mul(e2, L / 4)), u: mul(e2, L / 4), v: mul(side, w * 0.3), t });
+          depthMax[0] = Math.max(depthMax[0], L * Math.sin(ang));
+        }
+        if (v(9) === 1) parts.push({ c: [0, t / 2, Hm / 2], u: [W / 2, 0, 0], v: [0, 0, Hm / 2], t });
+        return mountPattern(parts, mount, { W, Hm, depth: depthMax[0], feet: 2 + v(11), footLen: v(12) });
+      },
+      describe(g) { const v = (i) => paramValue("petals", g, i); return `${v(1)} felt petals ${Math.round(v(8) * 1000)} mm thick on ${1 + v(0)} spiral${v(0) ? "s" : ""}, ${Math.round(v(2) * 100)}-${Math.round(Math.max(v(2), v(3)) * 100)} cm long, opening ${Math.round(v(5))}-${Math.round(Math.max(v(5), v(6)))}°.`; },
+    },
+    strips: {
+      group: "pattern", lab: true, direct: true, mounts: true, name: "Slotted felt strips", imitates: "the gills of a bracket fungus, honeycomb walls, an egg-crate",
+      idea: "Flat felt strips slotted into each other like an egg-crate: a 3D lattice made only from 2D cuts. Strips are closer and deeper where sound is strong. Flat-packs for touring.",
+      params: [opt("Pattern", ["square", "diagonal"], CELL), num("Spacing where sound is strong", 0.05, 0.2, "cm", RESP), num("Spacing where calm", 0.1, 0.35, "cm", RESP),
+        num("Depth where calm", 0.03, 0.15, "cm", RESP), num("Depth where sound is strong", 0.06, 0.3, "cm", RESP), num("Felt thickness", 0.004, 0.015, "mm", CELL),
+        num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) {
+        const v = (i) => paramValue("strips", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(6));
+        const sLo = v(1), sHi = Math.max(v(1), v(2)), dLo = v(3), dHi = Math.min(ctx.env.depth || 0.3, Math.max(v(3), v(4))), t = v(5), diag = v(0) === 1;
+        const col = (u) => { let s = 0; for (let k = 0; k < 8; k++) s += f(-W / 2 + u * W, ((k + 0.5) / 8) * Hm); return s / 8; };
+        const row = (w) => { let s = 0; for (let k = 0; k < 8; k++) s += f(-W / 2 + ((k + 0.5) / 8) * W, w * Hm); return s / 8; };
+        const depth = (x, z) => lerp(dLo, dHi, f(x, z)), parts = [], strips = [];
+        const xs = warp1D(W, (u) => lerp(sHi, sLo, col(u))).map((x) => x - W / 2), zs = warp1D(Hm, (w) => lerp(sHi, sLo, row(w)));
+        const seg = (A, B, name) => {
+          const m = mul(add(A, B), 0.5), d = depth(m[0], m[1]);
+          parts.push({ c: [m[0], d / 2, m[1]], u: [(B[0] - A[0]) / 2, 0, (B[1] - A[1]) / 2], v: [0, d / 2, 0], t });
+          return d;
+        };
+        if (!diag) {
+          xs.forEach((x, i) => { if (i === 0 || i === xs.length - 1) return; const hs = []; for (let k = 0; k < zs.length - 1; k++) hs.push(seg([x, zs[k]], [x, zs[k + 1]])); strips.push({ name: "V" + i, along: zs, heights: hs, slotsFrom: "back" }); });
+          zs.forEach((z, k) => { const hs = []; for (let i = 0; i < xs.length - 1; i++) hs.push(seg([xs[i], z], [xs[i + 1], z])); strips.push({ name: "H" + (k + 1), along: xs.map((x) => x + W / 2), heights: hs, slotsFrom: "front" }); });
+        } else {
+          // two families of lines at +-45 degrees, cut where they leave the face
+          const step = (sLo + sHi) / 2, inside = (q) => q[0] >= -W / 2 - 1e-9 && q[0] <= W / 2 + 1e-9 && q[1] >= -1e-9 && q[1] <= Hm + 1e-9;
+          for (const sg of [1, -1]) for (let c = -W - Hm; c <= W + Hm; c += step) {
+            const pts = [];
+            for (let s2 = -W - Hm; s2 <= W + Hm; s2 += step) { const q = [(c + s2) / 2, sg * (s2 - c) / 2 + Hm / 2]; pts.push(q); }
+            for (let k = 0; k < pts.length - 1; k++) if (inside(pts[k]) && inside(pts[k + 1])) seg(pts[k], pts[k + 1]);
+          }
+        }
+        const out = mountPattern(parts, mount, { W, Hm, depth: dHi, feet: 2 + v(7), footLen: v(8) });
+        if (!diag) out.stripPlan = { t, strips, W, Hm };
+        return out;
+      },
+      describe(g) { const v = (i) => paramValue("strips", g, i); return `${v(0) ? "Diagonal" : "Square"} egg-crate of ${Math.round(v(5) * 1000)} mm felt strips, ${Math.round(v(1) * 100)}-${Math.round(Math.max(v(1), v(2)) * 100)} cm apart, ${Math.round(v(3) * 100)}-${Math.round(Math.max(v(3), v(4)) * 100)} cm deep.`; },
+    },
+    strutlattice: {
+      group: "lattice", lab: true, direct: true, mounts: true, name: "Strut lattice", imitates: "spongy bone, the Venus flower basket sponge, radiolarians",
+      idea: "A printed lattice of thin struts, cells smaller and struts thicker where sound is strong, its surface rising and falling with the field. The struts alone hardly absorb (their gaps are far too big to rub the air): felt balls in the cells do the absorbing.",
+      params: [opt("Cell type", ["cubic", "body-centred", "octet", "diamond", "honeycomb"], CELL), num("Cell size where sound is strong", 0.04, 0.12, "cm", RESP), num("Cell size where calm", 0.06, 0.25, "cm", RESP),
+        num("Strut radius where calm", 0.001, 0.004, "mm", RESP), num("Strut radius where sound is strong", 0.002, 0.008, "mm", RESP), num("Lattice depth", 0.05, 0.3, "cm", CELL),
+        num("Surface wave", 0, 0.8, "%", RESP), num("Cells filled with felt", 0, 1, "%", RESP), num("Felt ball size", 0.3, 0.9, "%", CELL), num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) { return buildLattice("strutlattice", g, ctx, false); },
+      describe(g) { const v = (i) => paramValue("strutlattice", g, i); return `A ${["cubic", "body-centred", "octet", "diamond", "honeycomb"][v(0)]} lattice, cells ${Math.round(v(1) * 100)}-${Math.round(Math.max(v(1), v(2)) * 100)} cm, ${Math.round(v(5) * 100)} cm deep, ${Math.round(v(7) * 100)}% of cells filled with felt.`; },
+    },
+    tpms: {
+      group: "lattice", lab: true, direct: true, mounts: true, name: "Minimal surface (TPMS)", imitates: "butterfly wing scales (gyroids), sea urchin skeletons, cell membranes",
+      idea: "A continuous curved printed shell that splits space into two interwoven labyrinths, graded by the field. The shell itself barely absorbs; felt balls in one labyrinth do, densest where sound is strong.",
+      params: [opt("Surface", ["gyroid", "Schwarz P", "diamond"], CELL), num("Cell size where sound is strong", 0.05, 0.12, "cm", RESP), num("Cell size where calm", 0.08, 0.25, "cm", RESP),
+        num("Shell thickness where calm", 0.0008, 0.003, "mm", RESP), num("Shell thickness where sound is strong", 0.001, 0.005, "mm", RESP), num("Lattice depth", 0.06, 0.3, "cm", CELL),
+        num("Surface wave", 0, 0.8, "%", RESP), num("Cells filled with felt", 0, 1, "%", RESP), num("Felt ball size", 0.3, 0.9, "%", CELL), num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) { return buildLattice("tpms", g, ctx, true); },
+      describe(g) { const v = (i) => paramValue("tpms", g, i); return `A ${["gyroid", "Schwarz P", "diamond"][v(0)]} shell, cells ${Math.round(v(1) * 100)}-${Math.round(Math.max(v(1), v(2)) * 100)} cm, ${Math.round(v(5) * 100)} cm deep, ${Math.round(v(7) * 100)}% of its labyrinth filled with felt.`; },
+    },
+    spatial: {
+      group: "lattice", lab: true, direct: true, mounts: true, name: "Spatial lattice", imitates: "Biothing's robotically printed clouds and pergolas, coral heads, a tree flaring into its canopy",
+      idea: "A printed strut lattice that fills a grown body: a column that flares into a canopy, or a cloud. The body grows widest where sound is strong; felt pockets inside do the absorbing.",
+      params: [opt("Body", ["column into canopy", "cloud"], CELL), opt("Cell type", ["cubic", "body-centred", "octet", "diamond"], CELL), num("Cell size", 0.05, 0.16, "cm", CELL),
+        num("Strut radius", 0.0015, 0.006, "mm", CELL), num("Base or waist", 0.15, 0.5, "%", CELL), num("Flare or bulge", 0, 1, "%", RESP), num("Twist", 0, 90, "°", CELL),
+        num("Cells filled with felt", 0, 1, "%", RESP), num("Felt ball size", 0.3, 0.9, "%", CELL), num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) {
+        const v = (i) => paramValue("spatial", g, i), mount = ctx.mount, env = ctx.env, W = env.width, H = mount === "standing" ? env.height : mount === "hanging" ? env.width : env.height;
+        const f = fieldFn(ctx.field, W, H, v(9)), body = v(0), a = v(2), waist = v(4), flare = v(5), twist = (v(6) * Math.PI) / 180;
+        const fz = (z) => { let s = 0; for (let k = 0; k < 6; k++) s += f(-W / 2 + ((k + 0.5) / 6) * W, z); return s / 6; };
+        // radius of the body at height z (0 at the floor or ceiling attachment, H at the far end)
+        const radius = (z) => {
+          const u = z / H;
+          if (body === 0) return (W / 2) * (waist + (1 - waist) * Math.pow(u, 2.2) * (0.5 + 0.5 * flare + 0.4 * flare * fz(z)));
+          return (W / 2) * Math.max(0.05, waist + (1 - waist) * Math.sin(Math.PI * u) * (0.6 + 0.4 * flare * fz(z)));
+        };
+        const inside = (p) => { const z = p[2], u = z / H, rot = twist * u, x = p[0] * Math.cos(rot) + p[1] * Math.sin(rot), y = -p[0] * Math.sin(rot) + p[1] * Math.cos(rot); return z >= -1e-6 && z <= H + 1e-6 && Math.max(Math.abs(x), Math.abs(y)) <= radius(z) + 1e-6; };
+        let cell = a, n = 0;
+        for (let it = 0; it < 4; it++) { n = Math.ceil(W / cell) ** 2 * Math.ceil(H / cell); if (n * UNIT[Math.min(3, v(1))].length * 0.35 < 14000) break; cell *= 1.25; }
+        const nu = Math.ceil(W / cell), nw = Math.ceil(H / cell), map = (u, vv, w) => [-W / 2 + (u / nu) * W, -W / 2 + (vv / nu) * W, (w / nw) * H];
+        const parts = latticeStruts(Math.min(3, v(1)), nu, nu, nw, map, inside, () => v(3));
+        const balls = [];
+        for (let k = 0; k < nw; k++) for (let j = 0; j < nu; j++) for (let i = 0; i < nu; i++) { const c = map(i + 0.5, j + 0.5, k + 0.5); if (inside(c)) balls.push([c, f(c[0], c[2])]); }
+        balls.sort((p, q) => q[1] - p[1]);
+        for (const [c] of balls.slice(0, Math.round(balls.length * v(7)))) parts.push({ a: c, b: c, r: (cell / 2) * v(8) * 0.95 });
+        let out = parts;
+        if (mount === "hanging") out = mapParts(parts, (q) => [q[0], q[1], -q[2]]);
+        if (mount === "wall") { const k = Math.min(1, (env.depth || 0.3) / (W / 2)); out = mapParts(parts.filter((p) => p.a[1] >= -1e-6 && p.b[1] >= -1e-6), (q) => [q[0], q[1] * k, q[2]]); }
+        if (mount === "standing") { out.push({ c: [0, 0, 0.01], u: [Math.max(0.25, radius(0) * 1.6), 0, 0], v: [0, Math.max(0.25, radius(0) * 1.6), 0], t: 0.02, structure: true }); out.label = "a weighted base plate"; }
+        else if (mount === "hanging") { out.push({ c: [0, 0, -0.01], u: [radius(0), 0, 0], v: [0, radius(0), 0], t: 0.02, structure: true }); out.label = "a ceiling plate"; }
+        else out.label = "a wall plate behind";
+        return out;
+      },
+      describe(g) { const v = (i) => paramValue("spatial", g, i); return `A ${["column flaring into a canopy", "cloud"][v(0)]} filled with a ${["cubic", "body-centred", "octet", "diamond"][v(1)]} lattice of ${Math.round(v(2) * 100)} cm cells, ${Math.round(v(7) * 100)}% felt pockets.`; },
+    },
+  };
+  // Module lattices (struts or a minimal surface) on cells warped by the field, conforming to a wavy surface.
+  function buildLattice(rule, g, ctx, surface) {
+    const v = (i) => paramValue(rule, g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(9));
+    const cLo = v(1), cHi = Math.max(v(1), v(2)), D = Math.min(ctx.env.depth || 0.3, v(5)), wave = v(6), infill = v(7), plug = v(8);
+    const col = (u) => { let s = 0; for (let k = 0; k < 8; k++) s += f(-W / 2 + u * W, ((k + 0.5) / 8) * Hm); return s / 8; };
+    const row = (w) => { let s = 0; for (let k = 0; k < 8; k++) s += f(-W / 2 + ((k + 0.5) / 8) * W, w * Hm); return s / 8; };
+    let grow = 1, xs, zs, nv;
+    for (let it = 0; it < 5; it++) {
+      xs = warp1D(W, (u) => lerp(cHi, cLo, col(u)) * grow); zs = warp1D(Hm, (w) => lerp(cHi, cLo, row(w)) * grow);
+      nv = Math.max(1, Math.round(D / ((cLo + cHi) / 2 / grow)));
+      const cells = (xs.length - 1) * (zs.length - 1) * nv;
+      if (surface ? cells < 2500 : cells * (v(0) === 4 ? 6 : UNIT[v(0)].length) * 0.4 < 12000) break;
+      grow *= 1.2;
+    }
+    const nu = xs.length - 1, nw = zs.length - 1, Dsurf = (x, z) => D * (1 - wave * (1 - f(x, z)));
+    const map = (u, vv, w) => { const x = atWarp(xs, u) - W / 2, z = atWarp(zs, w); return [x, (vv / nv) * Dsurf(x, z), z]; };
+    let parts;
+    if (!surface) parts = latticeStruts(v(0), nu, nv, nw, map, null, (p) => lerp(v(3), Math.max(v(3), v(4)), f(p[0], p[2])));
+    else {
+      const T = TPMS[v(0)], tLo = v(3), tHi = Math.max(v(3), v(4)), cell = (cLo + cHi) / 2 / grow, h = Math.max(cLo / grow / 4, Math.cbrt((W * Hm * D) / 7000));
+      const gx = Math.ceil(W / h), gy = Math.max(2, Math.ceil(D / h)), gz = Math.ceil(Hm / h);
+      const val = (x, y, z) => { const ds = Dsurf(x, z); return T.f(2 * Math.PI * invWarp(xs, x + W / 2), (2 * Math.PI * nv * y) / Math.max(ds, 1e-3), 2 * Math.PI * invWarp(zs, z)); };
+      const tris = isoTriangles(val, -W / 2, 0, 0, W / gx, D / gy, Hm / gz, gx, gy, gz, (tr) => { const c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); return c[1] <= Dsurf(c[0], c[2]) + 1e-6; });
+      parts = tris.map((tr) => { const c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); return { tri: tr, t: lerp(tLo, tHi, f(c[0], c[2])), structure: true }; });
+      void cell;
+    }
+    // felt balls in the cells (strut lattices) or in one labyrinth (minimal surfaces), strongest field first
+    const balls = [];
+    for (let k = 0; k < nw; k++) for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
+      const c = map(i + 0.5, j + 0.5, k + 0.5), sz = Math.min(xs[i + 1] - xs[i], zs[k + 1] - zs[k], Dsurf(c[0], c[2]) / nv);
+      if (surface && TPMS[v(0)].f(2 * Math.PI * (i + 0.5) + Math.PI / 2, 2 * Math.PI * (j + 0.5), 2 * Math.PI * (k + 0.5)) > 0 && v(0) === 1) continue;
+      balls.push([c, f(c[0], c[2]), sz]);
+    }
+    balls.sort((p, q) => q[1] - p[1]);
+    for (const [c, , sz] of balls.slice(0, Math.round(balls.length * infill))) parts.push({ a: c, b: c, r: (sz / 2) * plug * (surface ? 0.55 : 0.9) });
+    return mountPattern(parts, mount, { W, Hm, depth: D, mirror: false, feet: 2 + v(10), footLen: v(11) });
+  }
+  // Cellular automata (Andrasek's first example, Wolfram's "new kind of science"): a 3D grid of cells,
+  // each born or dying by how many of its neighbours are alive, generation after generation. Birth is
+  // likelier where the field is strong. Parts come out in birth order, so replaying them replays the growth.
+  LAB.cellular = {
+    group: "pattern", lab: true, direct: true, mounts: true, name: "Cellular automata", imitates: "coral and lichen growing by accretion, frost dendrites, sponges",
+    idea: "Each cell only looks at its 26 neighbours: with the right number alive it is born, with too many it dies. Run over many generations, these dumb local rules grow intricate porous bodies, densest where sound is strong.",
+    params: [opt("Rule", ["coral (accretes, never dies)", "sponge (born 1-4, dies when crowded)", "crystal (grows from faces only)"], CELL), num("Cell size", 0.03, 0.1, "cm", CELL),
+      num("Generations", 4, 40, "", CELL, true), num("Seeds", 1, 30, "", CELL, true), num("Birth chance", 0.05, 0.8, "%", RESP), num("Contrast", 0.5, 3, "", RESP),
+      num("Depth", 0.05, 0.3, "cm", CELL), opt("Made as", ["felt blocks", "printed bonds", "printed bonds with felt"], CELL), num("Block size", 0.4, 1, "%", CELL), ...holdParams],
+    build(g, down, ctx) {
+      const v = (i) => paramValue("cellular", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(5)), rand = rng(seedOf(g) + 5);
+      const rule = v(0), D = Math.min(ctx.env.depth || 0.3, v(6)), style = v(7);
+      let a = v(1);
+      while ((W / a) * (Hm / a) * (D / a) > 40000) a *= 1.15;
+      const nx = Math.max(2, Math.round(W / a)), ny = Math.max(2, Math.round(D / a)), nz = Math.max(2, Math.round(Hm / a)), N = nx * ny * nz;
+      const id = (i, j, k) => i + nx * (j + ny * k), born = new Int16Array(N).fill(-1), pos = (i, j, k) => [-W / 2 + (i + 0.5) * (W / nx), (j + 0.5) * (D / ny), (k + 0.5) * (Hm / nz)];
+      const fCell = new Float32Array(N);
+      for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const p = pos(i, j, k); fCell[id(i, j, k)] = f(p[0], p[2]); }
+      // seeds on the back layer at the strongest places of the field
+      const back = [];
+      for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) back.push([i, k, fCell[id(i, 0, k)] + rand() * 0.15]);
+      back.sort((p, q) => q[2] - p[2]);
+      for (const [i, k] of back.slice(0, v(3))) born[id(i, 0, k)] = 0;
+      const gens = v(2), chance = v(4);
+      for (let gen = 1; gen <= gens; gen++) {
+        const alive = Uint8Array.from(born, (b) => (b >= 0 ? 1 : 0)), next = [], dead = [];
+        for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+          let n26 = 0, n6 = 0;
+          for (let dk = -1; dk <= 1; dk++) for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+            if (!di && !dj && !dk) continue;
+            const ii = i + di, jj = j + dj, kk = k + dk;
+            if (ii < 0 || jj < 0 || kk < 0 || ii >= nx || jj >= ny || kk >= nz || !alive[id(ii, jj, kk)]) continue;
+            n26++; if (Math.abs(di) + Math.abs(dj) + Math.abs(dk) === 1) n6++;
+          }
+          const c = id(i, j, k);
+          if (alive[c]) { if (rule === 1 && n26 > 12) dead.push(c); continue; }
+          const ok = rule === 0 ? n26 >= 1 && n26 <= 2 : rule === 1 ? n26 >= 1 && n26 <= 4 : n6 === 1 && n26 <= 3;
+          if (ok && rand() < chance * (0.15 + 0.85 * fCell[c])) next.push(c);
+        }
+        for (const c of next) born[c] = gen;
+        for (const c of dead) born[c] = -2;
+      }
+      const cells = [];
+      for (let c = 0; c < N; c++) if (born[c] >= 0) cells.push(c);
+      cells.sort((p, q) => born[p] - born[q]);
+      const coord = (c) => [c % nx, Math.floor(c / nx) % ny, Math.floor(c / (nx * ny))], parts = [], cw = W / nx, cd = D / ny, ch = Hm / nz, bs = v(8);
+      for (const c of cells) {
+        const [i, j, k] = coord(c), p = pos(i, j, k);
+        if (style !== 1) parts.push({ c: p, u: [(cw / 2) * bs, 0, 0], v: [0, 0, (ch / 2) * bs], t: cd * bs });
+        if (style !== 0) for (const [di, dj, dk] of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+          const ii = i + di, jj = j + dj, kk = k + dk;
+          if (ii < nx && jj < ny && kk < nz && born[id(ii, jj, kk)] >= 0) parts.push({ a: p, b: pos(ii, jj, kk), r: Math.min(cw, ch) * 0.06, structure: true });
+        }
+      }
+      if (!parts.length) parts.push({ c: pos(0, 0, 0), u: [cw / 2, 0, 0], v: [0, 0, ch / 2], t: cd });
+      return mountPattern(parts, mount, { W, Hm, depth: D, mirror: style === 0, feet: 2 + v(9), footLen: v(10) });
+    },
+    describe(g) { const v = (i) => paramValue("cellular", g, i); return `A ${["coral", "sponge", "crystal"][v(0)]} cellular automaton, ${Math.round(v(1) * 100)} cm cells grown over ${v(2)} generations from ${v(3)} seeds, made as ${["felt blocks", "printed bonds", "printed bonds with felt"][v(7)]}.`; },
+  };
+  // Liquid bioform: blobs that flow into one smooth body (an implicit surface of blended spheres),
+  // made as a thin shell of heat-formed felt and perforated where sound is strong, so sound gets inside.
+  LAB.bioform = {
+    group: "pattern", lab: true, direct: true, mounts: true, name: "Liquid bioform", imitates: "drops and splashes, cell clusters, seed pods, organic design's fluid bodies",
+    idea: "Blobs placed along a flowing path melt into one smooth body. It is made as a thin shell of heat-formed felt; where sound is strong the shell opens into holes, so sound reaches the felt inside as well as outside.",
+    params: [num("Blobs", 3, 24, "", CELL, true), num("Blob size", 0.12, 0.4, "cm", CELL), num("Flow (how far the path wanders)", 0, 1, "%", CELL), num("Melt (smoothness)", 0.3, 1, "%", CELL),
+      num("Holes", 0, 120, "", RESP, true), num("Hole size where sound is strong", 0.03, 0.15, "cm", RESP), num("Felt shell thickness", 0.003, 0.012, "mm", CELL), num("Contrast", 0.5, 3, "", RESP),
+      opt("Body", ["flowing blobs", "pulled from a slab"], CELL), ...holdParams],
+    build(g, down, ctx) {
+      if (paramValue("bioform", g, 8) === 1) return pulledBody(g, ctx);
+      const v = (i) => paramValue("bioform", g, i), mount = ctx.mount, env = ctx.env, W = env.width, H = mount === "standing" ? env.height - 0.05 : mount === "hanging" ? env.width : env.height;
+      const D = mount === "wall" ? env.depth : W, f = fieldFn(ctx.field, W, H, v(7)), rand = rng(seedOf(g) + 11), nb = v(0), R0 = v(1), flow = v(2), melt = v(3), t = v(6);
+      // a wandering path up the body, pulled sideways towards where the field is strong
+      const blobs = [];
+      let x = 0, y = 0;
+      for (let k = 0; k < nb; k++) {
+        const z = H * (0.12 + (0.76 * k) / Math.max(1, nb - 1));
+        let bx = x, bs = -1;
+        for (let s2 = 0; s2 < 5; s2++) { const cx = Math.max(-W / 3, Math.min(W / 3, x + (rand() - 0.5) * W * 0.5 * flow)), sc = f(cx, z) + rand() * 0.2; if (sc > bs) { bs = sc; bx = cx; } }
+        x = bx; y = Math.max(-D / 3, Math.min(D / 3, y + (rand() - 0.5) * D * 0.4 * flow));
+        blobs.push([x, mount === "wall" ? D * 0.35 : y, z, R0 * (0.6 + 0.6 * rand())]);
+      }
+      const k2 = 1 / (melt * melt), h0 = Math.max(0.03, Math.cbrt((W * (mount === "wall" ? env.depth : W) * H) / 22000));
+      for (const b of blobs) b[3] = Math.max(b[3], (2 * h0) / (0.83 * melt)); // never smaller than the mesh can see
+      const val = (px, py, pz) => { let s2 = 0; for (const [bx, by, bz, r] of blobs) s2 += Math.exp((-k2 * ((px - bx) ** 2 + (py - by) ** 2 + (pz - bz) ** 2)) / (r * r)); return 0.5 - s2; };
+      const y0 = mount === "wall" ? 0 : -D / 2, h = Math.max(0.03, Math.cbrt((W * D * H) / 22000)), gx = Math.ceil(W / h), gy = Math.max(2, Math.ceil(D / h)), gz = Math.ceil(H / h);
+      let tris = isoTriangles((a, b, c) => (mount === "wall" && b < 0.01 ? 1 : val(a, b, c)), -W / 2, y0, 0, W / gx, D / gy, H / gz, gx, gy, gz);
+      // holes: random points on the surface, open widest where the field is strong
+      const holes = [];
+      for (let k = 0; k < v(4) && tris.length; k++) { const tr = tris[Math.floor(rand() * tris.length)], c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); holes.push([c, v(5) * (0.25 + 0.75 * f(c[0], c[2]))]); }
+      if (holes.length) tris = tris.filter((tr) => { const c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); return holes.every(([q, r]) => Math.hypot(...sub(c, q)) > r); });
+      let parts = tris.map((tr) => ({ tri: tr, t }));
+      if (mount === "hanging") { parts = mapParts(parts, (q) => [q[0], q[1], q[2] - H]); parts.push({ a: [0, 0, 0], b: [0, 0, -H * 0.15], r: 0.004, structure: true }); parts.label = "a hanging cable"; return parts; }
+      if (mount === "wall") { parts.push({ c: [0, 0.004, H * 0.7], u: [W * 0.3, 0, 0], v: [0, 0, 0.04], t: 0.008, structure: true }); parts.label = "a wall cleat behind"; return parts; }
+      parts.push({ c: [0, 0, 0.01], u: [W * 0.3, 0, 0], v: [0, W * 0.3, 0], t: 0.02, structure: true }, { a: [0, 0, 0.02], b: [0, 0, H * 0.5], r: 0.012, structure: true });
+      parts.label = "a weighted base with a stem";
+      return parts;
+    },
+    describe(g) { const v = (i) => paramValue("bioform", g, i); if (v(8) === 1) return `A slab with ${v(0)} pulls stretched out of it (leaving liquid voids behind), a ${Math.round(v(6) * 1000)} mm heat-formed felt shell with ${v(4)} holes.`; return `${v(0)} blobs melted into one body, a ${Math.round(v(6) * 1000)} mm heat-formed felt shell with ${v(4)} holes up to ${Math.round(v(5) * 100)} cm.`; },
+  };
+  // Agent fibres: a swarm of agents crawls over the face, steered by a flow direction, by their
+  // neighbours (they line up, like a flock) and towards where sound is strong, weaving in depth.
+  // Their trails become cords; where sound is strong they sprout short hooked tufts.
+  LAB.swarm = {
+    group: "pattern", lab: true, direct: true, mounts: true, name: "Agent fibres", imitates: "mycelium, root mats, coir and sisal, a flock's paths, fibre printed by a robot",
+    idea: "Many simple agents crawl over the face, following a flow, lining up with their neighbours and drifting towards strong sound. Their trails become a mat of soft cords, with hooked tufts where sound is strongest. A mat of fibres is how felt absorbs, here at a larger scale.",
+    params: [num("Agents", 20, 300, "", CELL, true), num("Steps per agent", 20, 200, "", CELL, true), num("Flow angle", 0, 180, "°", CELL), num("Follow the flow", 0, 1, "%", CELL),
+      num("Line up with neighbours", 0, 1, "%", CELL), num("Drift towards sound", 0, 1, "%", RESP), num("Wander", 0, 1, "%", CELL), num("Weave depth", 0.02, 0.2, "cm", CELL),
+      num("Cord thickness", 0.002, 0.012, "mm", CELL), num("Tufts where sound is strong", 0, 1, "%", RESP), num("Tuft length", 0.02, 0.12, "cm", RESP), opt("Made as", ["soft cord (absorbs)", "printed"], CELL),
+      num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+    build(g, down, ctx) {
+      const v = (i) => paramValue("swarm", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(12)), rand = rng(seedOf(g) + 31);
+      const D = Math.min(ctx.env.depth || 0.3, v(7)), r = v(8), printed = v(11) === 1, a0 = (v(2) * Math.PI) / 180, base = [Math.cos(a0), Math.sin(a0)];
+      let nA = v(0), steps = v(1);
+      while (nA * steps > 14000) { nA = Math.round(nA * 0.9); steps = Math.round(steps * 0.95); }
+      const stepLen = Math.max(0.012, Math.min(W, Hm) / 60), R = 0.08, parts = [], extra = printed ? { structure: true } : {};
+      const spawn = () => { const side = rand(); return side < 0.5 ? { x: -W / 2 + rand() * W, z: base[1] > 0 ? 0.001 : Hm - 0.001 } : { x: base[0] > 0 ? -W / 2 + 0.001 : W / 2 - 0.001, z: rand() * Hm }; };
+      const agents = Array.from({ length: nA }, () => ({ ...{ x: -W / 2 + rand() * W, z: rand() * Hm }, d: [...base], ph: rand() * 6.283, y: 0 }));
+      const order = [];
+      for (let s2 = 0; s2 < steps; s2++) {
+        const grid = new Map(), cellOf = (a) => Math.floor((a.x + W) / R) + "," + Math.floor(a.z / R);
+        for (const a of agents) { const k = cellOf(a); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(a); }
+        for (const a of agents) {
+          // line up with neighbours
+          let ax = 0, az = 0;
+          const cx = Math.floor((a.x + W) / R), cz = Math.floor(a.z / R);
+          for (let i = -1; i <= 1; i++) for (let k = -1; k <= 1; k++) for (const b of grid.get(cx + i + "," + (cz + k)) || []) if (b !== a) { ax += b.d[0]; az += b.d[1]; }
+          const al = Math.hypot(ax, az), e = 0.02, gx = (f(a.x + e, a.z) - f(a.x - e, a.z)) / (2 * e), gz = (f(a.x, a.z + e) - f(a.x, a.z - e)) / (2 * e), gl = Math.hypot(gx, gz) || 1;
+          const turn = (rand() - 0.5) * 2 * v(6) * 0.9;
+          let dx = a.d[0] + v(3) * 0.3 * (base[0] - a.d[0]) + (al ? v(4) * 0.5 * (ax / al - a.d[0]) : 0) + v(5) * 0.4 * (gx / gl);
+          let dz = a.d[1] + v(3) * 0.3 * (base[1] - a.d[1]) + (al ? v(4) * 0.5 * (az / al - a.d[1]) : 0) + v(5) * 0.4 * (gz / gl);
+          const c = Math.cos(turn), sn = Math.sin(turn);
+          [dx, dz] = [dx * c - dz * sn, dx * sn + dz * c];
+          const dl = Math.hypot(dx, dz) || 1;
+          a.d = [dx / dl, dz / dl];
+          const P = [a.x, D / 2 + (D / 2 - r) * Math.sin(a.ph), a.z];
+          a.x += a.d[0] * stepLen; a.z += a.d[1] * stepLen; a.ph += stepLen / 0.06;
+          if (a.x < -W / 2 || a.x > W / 2 || a.z < 0 || a.z > Hm) { Object.assign(a, spawn(), { d: [...base] }); continue; }
+          const Q = [a.x, D / 2 + (D / 2 - r) * Math.sin(a.ph), a.z], fq = f(a.x, a.z);
+          parts.push({ a: P, b: Q, r, ...extra });
+          if (rand() < v(9) * fq * 0.15) {
+            const L = v(10) * (0.5 + fq), hook = [a.d[0] * 0.5, 0, a.d[1] * 0.5], t1 = add(Q, [0, L * 0.7, 0]);
+            parts.push({ a: Q, b: [t1[0], Math.min(D + L, t1[1]), t1[2]], r: r * 0.8, ...extra }, { a: [t1[0], Math.min(D + L, t1[1]), t1[2]], b: add([t1[0], Math.min(D + L, t1[1]), t1[2]], mul(hook, L * 0.6)), r: r * 0.7, ...extra });
+          }
+        }
+      }
+      return mountPattern(parts, mount, { W, Hm, depth: D, mirror: false, feet: 2 + v(13), footLen: v(14) });
+    },
+    describe(g) { const v = (i) => paramValue("swarm", g, i); return `${v(0)} agents over ${v(1)} steps, flowing at ${Math.round(v(2))}°, ${Math.round(v(8) * 1000)} mm ${v(11) ? "printed fibres" : "soft cords"} woven ${Math.round(v(7) * 100)} cm deep${v(9) > 0.1 ? ", hooked tufts where sound is strong" : ""}.`; },
+  };
+  // "Pulled from a slab" (after Ross Lovegrove's Liquid Table Bioform, whose legs seem stretched out of the
+  // metal, leaving a liquid void in the top): a slab with pulls stretched out of it towards where the field
+  // is strong, and a dimple left above each pull. On a wall the pulls come out of the wall; under a ceiling
+  // they hang like stalactites; standing, the slab rests on its pulls.
+  function pulledBody(g, ctx) {
+    const v = (i) => paramValue("bioform", g, i), mount = ctx.mount, env = ctx.env, W = env.width, rand = rng(seedOf(g) + 23);
+    const span = mount === "wall" ? env.height : W, L = mount === "wall" ? env.depth : mount === "hanging" ? env.width * 0.8 : env.height - 0.05;
+    const f = fieldFn(ctx.field, W, span, v(7)), np = v(0), r0 = Math.max(0.03, v(1) * 0.35), melt = v(3), th = 0.04, t = v(6), flow = v(2);
+    // pulls at the strongest places of the field, kept apart; local frame: a across, b along the slab, n out of it
+    const cand = [];
+    for (let i = 0; i < 10; i++) for (let k = 0; k < 10; k++) { const a = -W / 2 + ((i + 0.5) / 10) * W, b = ((k + 0.5) / 10) * span; cand.push([a, b, f(a, b) + rand() * 0.25]); }
+    cand.sort((p, q) => q[2] - p[2]);
+    const pulls = [];
+    for (const c of cand) if (pulls.length < np && pulls.every((q) => Math.hypot(q[0] - c[0], q[1] - c[1]) > r0 * 2.2)) pulls.push([c[0], c[1], mount === "standing" ? L : L * (0.45 + 0.55 * (1 - flow * rand()))]);
+    const k2 = 1 / (melt * melt);
+    const seg = (a, b, n, P) => { const tt = Math.max(0, Math.min(1, n / P[2])), d2 = (a - P[0]) ** 2 + (b - P[1]) ** 2 + (n - tt * P[2]) ** 2, r = r0 * (1 - 0.55 * tt); return Math.exp((-k2 * d2) / (r * r)); };
+    const val = (a, b, n) => {
+      let s2 = Math.exp(-((n / th) ** 2) * 2);
+      for (const P of pulls) { s2 += seg(a, b, n, P); s2 -= 0.9 * Math.exp((-((a - P[0]) ** 2 + (b - P[1]) ** 2 + (n + th * 0.6) ** 2)) / (r0 * r0 * 0.5)); }
+      return 0.5 - s2;
+    };
+    const h = Math.max(0.025, Math.cbrt((W * span * (L + 0.1)) / 22000)), ga = Math.ceil(W / h), gb = Math.ceil(span / h), gn = Math.ceil((L + 0.12) / h);
+    let tris = isoTriangles(val, -W / 2, 0, -0.08, W / ga, span / gb, (L + 0.12) / gn, ga, gb, gn);
+    const holes = [];
+    for (let k = 0; k < v(4) && tris.length; k++) { const tr = tris[Math.floor(rand() * tris.length)], c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); holes.push([c, v(5) * (0.25 + 0.75 * f(c[0], c[1]))]); }
+    if (holes.length) tris = tris.filter((tr) => { const c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); return holes.every(([q, r]) => Math.hypot(...sub(c, q)) > r); });
+    const local = tris.map((tr) => ({ tri: tr, t }));
+    // local (a, b, n) to the room
+    let parts;
+    if (mount === "wall") { parts = mapParts(local, (q) => [q[0], Math.max(0, q[2]) + 0.01, q[1]]); parts.push({ c: [0, 0.004, span * 0.75], u: [W * 0.3, 0, 0], v: [0, 0, 0.04], t: 0.008, structure: true }); parts.label = "a wall cleat behind"; }
+    else if (mount === "hanging") { parts = mapParts(local, (q) => [q[0], q[1] - span / 2, -q[2] - 0.1]); for (const sx of [-1, 1]) parts.push({ a: [(sx * W) / 3, 0, 0], b: [(sx * W) / 3, 0, -0.1], r: 0.003, structure: true }); parts.label = "2 hanging cables"; }
+    else {
+      parts = mapParts(local, (q) => [q[0], q[1] - span / 2, Math.max(0, L - q[2])]);
+      for (const P of pulls) parts.push({ c: [P[0], P[1] - span / 2, 0.006], u: [r0, 0, 0], v: [0, r0, 0], t: 0.012, structure: true });
+      parts.label = `its ${pulls.length} pulls as legs, on weighted pads`;
+    }
+    return parts;
+  }
+  for (const [k, r] of Object.entries(LAB)) { r.genes = r.params.map((p) => p.label); RULES[k] = r; }
+
+  // Geometric fields to grow from when you want to draw by hand rather than by sound: an attractor
+  // point, a gradient, rings, the interference of two waves (Biothing's ceiling) or soft noise.
+  function patternField(spec, nx = 24, nz = 36) {
+    const data = new Float32Array(nx * nz), { kind = "waves", x = 0.5, z = 0.5, angle = 0, f1 = 3, f2 = 5, seed = 1 } = spec;
+    const a = (angle * Math.PI) / 180, rand = rng(seed * 977 + 3), knots = Array.from({ length: 49 }, () => rand());
+    const noise = (u, w) => { const U = u * 6, Wv = w * 6, i = Math.min(5, Math.floor(U)), k = Math.min(5, Math.floor(Wv)), fu = U - i, fw = Wv - k, q = (p, r) => knots[p + 7 * r], s = (t) => t * t * (3 - 2 * t);
+      return (q(i, k) * (1 - s(fu)) + q(i + 1, k) * s(fu)) * (1 - s(fw)) + (q(i, k + 1) * (1 - s(fu)) + q(i + 1, k + 1) * s(fu)) * s(fw); };
+    for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+      const u = i / (nx - 1), w = k / (nz - 1);
+      let val;
+      if (kind === "attractor") val = Math.exp(-((u - x) ** 2 + (w - z) ** 2) / (2 * (0.08 + 0.3 / f1) ** 2));
+      else if (kind === "gradient") val = (u - 0.5) * Math.cos(a) + (w - 0.5) * Math.sin(a);
+      else if (kind === "radial") val = 0.5 + 0.5 * Math.cos(2 * Math.PI * f1 * Math.hypot(u - x, w - z));
+      else if (kind === "noise") val = noise(u, w);
+      else val = Math.sin(2 * Math.PI * f1 * u) + Math.sin(2 * Math.PI * f2 * (u * Math.cos(a) + w * Math.sin(a)));
+      data[i + nx * k] = val;
+    }
+    return { data: normalise01(data), nx, nz };
+  }
+
+  // Quick facts for a live preview: felt mass, print mass and (standing) stability, no wave simulation.
+  function inspect(prims, softDensity, structureDensity, mount) {
+    const vox = voxelize(prims, 0.05), mass = vox.volume * softDensity;
+    let print = 0;
+    for (const p of prims) {
+      if (!p.structure) continue;
+      if (isTri(p)) print += 0.5 * Math.hypot(...cross(sub(p.tri[1], p.tri[0]), sub(p.tri[2], p.tri[0]))) * p.t;
+      else if (isSheet(p)) print += 4 * Math.hypot(...cross(p.u, p.v)) * p.t;
+      else print += Math.PI * p.r * p.r * Math.hypot(...sub(p.b, p.a));
+    }
+    return { mass, printMass: print * structureDensity, stance: mount === "standing" ? stability(prims, vox.com, mass, structureDensity) : null };
+  }
+
   // Every rule also gets four "stance" genes (used when the form stands on its own: root flare,
   // holdfast type, base size, number of roots) and a last gene choosing the soft material.
   const STANCE = 4;
@@ -438,7 +1057,7 @@
   function bounds(prims) {
     const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
     for (const p of prims) {
-      const pts = isSheet(p) ? corners(p) : [p.a, p.b], pad = isSheet(p) ? p.t / 2 : p.r;
+      const pts = isTri(p) ? p.tri : isSheet(p) ? corners(p) : [p.a, p.b], pad = isTri(p) || isSheet(p) ? p.t / 2 : p.r;
       for (const q of pts) for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], q[i] - pad); max[i] = Math.max(max[i], q[i] + pad); }
     }
     return { min, max };
@@ -455,12 +1074,34 @@
   }
 
   function envelope(size, mount) {
-    return { width: size, height: mount === "hanging" ? size : Math.min(2.2, size * 1.5), mount };
+    if (mount === "wall") return { width: size, height: size, depth: Math.min(0.35, Math.max(0.1, 0.3 * size)), mount };
+    return { width: size, height: mount === "hanging" ? size : Math.min(2.2, size * 1.5), depth: 0.3, mount };
+  }
+  // A form grown for the ceiling, turned to grow out of a wall and pressed into a relief no deeper than
+  // the envelope allows (like a tree trained flat against a wall).
+  function toWall(parts, env) {
+    const r = mapParts(parts, (q) => [q[0], -q[2], q[1]]), b = bounds(r.map((p) => (isSheet(p) ? { ...p, t: 0 } : p)));
+    const sf = Math.min(env.width / (b.max[0] - b.min[0] || 1e-9), env.height / (b.max[2] - b.min[2] || 1e-9)), sd = Math.min(sf, env.depth / (b.max[1] - b.min[1] || 1e-9));
+    const cx = (b.min[0] + b.max[0]) / 2, cz = (b.min[2] + b.max[2]) / 2, tr = (q) => [(q[0] - cx) * sf, (q[1] - b.min[1]) * sd + 0.02, (q[2] - cz) * sf + env.height / 2];
+    const out = r.map((p) => (isSheet(p) ? { ...p, c: tr(p.c), u: [p.u[0] * sf, p.u[1] * sd, p.u[2] * sf], v: [p.v[0] * sf, p.v[1] * sd, p.v[2] * sf] } : isTri(p) ? { ...p, tri: p.tri.map(tr) } : { ...p, a: tr(p.a), b: tr(p.b), r: p.r * sd }));
+    return wallCleat(out, env);
+  }
+  function wallCleat(out, env) {
+    out.push({ c: [0, 0.004, env.height * 0.75], u: [env.width * 0.4, 0, 0], v: [0, 0, 0.04], t: 0.008, structure: true });
+    out.label = "a wall cleat behind";
+    return out;
   }
 
   function grow(rule, genes, opts) {
-    const env = envelope(opts.size, opts.mount);
-    if (RULES[rule].direct) return RULES[rule].build(genes, opts.mount === "hanging", { env, field: opts.field, material: opts.material });
+    const env = envelope(opts.size, opts.mount), R = RULES[rule], ctx = { env, field: opts.field, material: opts.material, mount: opts.mount };
+    if (R.mounts) return R.build(genes, opts.mount === "hanging", ctx);
+    if (R.direct && opts.mount === "wall") {
+      // a sound-grown sheet stood just off the wall, its feet replaced by a cleat
+      const raw = R.build(genes, false, ctx), soft = raw.filter((p) => !p.structure), b = bounds(soft);
+      return wallCleat(mapParts(soft, (q) => [q[0], q[1] - b.min[1] + 0.02, q[2]]), env);
+    }
+    if (R.direct) return R.build(genes, opts.mount === "hanging", ctx);
+    if (opts.mount === "wall") return toWall(R.build(genes, true), env);
     const parts = fit(RULES[rule].build(genes, opts.mount === "hanging"), env);
     return opts.mount === "standing" ? standUp(parts, genes.slice(RULES[rule].genes.length, RULES[rule].genes.length + STANCE), env) : parts;
   }
@@ -472,11 +1113,11 @@
     const flare = lerp(0, 0.6, st[0]), H = env.height;
     const k = (z) => 1 + flare * (1 - (2 * Math.max(0, Math.min(H, z))) / H);
     const fl = (q) => [q[0] * k(q[2]), q[1] * k(q[2]), q[2]];
-    let out = parts.map((p) => (isSheet(p) ? { ...p, c: fl(p.c) } : { ...p, a: fl(p.a), b: fl(p.b) }));
+    let out = parts.map((p) => (isTri(p) ? { ...p, tri: p.tri.map(fl) } : isSheet(p) ? { ...p, c: fl(p.c) } : { ...p, a: fl(p.a), b: fl(p.b) }));
     const b = bounds(out), wide = Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1]);
     if (wide > env.width) {
       const s = env.width / wide, sx = (q) => [q[0] * s, q[1] * s, q[2]];
-      out = out.map((p) => (isSheet(p) ? { ...p, c: sx(p.c), u: [p.u[0] * s, p.u[1] * s, p.u[2]], v: [p.v[0] * s, p.v[1] * s, p.v[2]] } : { ...p, a: sx(p.a), b: sx(p.b) }));
+      out = out.map((p) => (isTri(p) ? { ...p, tri: p.tri.map(sx) } : isSheet(p) ? { ...p, c: sx(p.c), u: [p.u[0] * s, p.u[1] * s, p.u[2]], v: [p.v[0] * s, p.v[1] * s, p.v[2]] } : { ...p, a: sx(p.a), b: sx(p.b) }));
     }
     const R = lerp(0.25, 0.5, st[2]) * env.width, roots = st[1] < 0.5, legs = 3 + Math.floor(st[3] * 3.999), top = 0.45 * H;
     if (roots) {
@@ -511,7 +1152,11 @@
     for (const p of parts) {
       if (!p.structure) continue;
       let vol, c;
-      if (isSheet(p)) {
+      if (isTri(p)) {
+        const [A, B, C] = p.tri;
+        vol = 0.5 * Math.hypot(...cross(sub(B, A), sub(C, A))) * p.t; c = mul(add(add(A, B), C), 1 / 3);
+        for (const q of p.tri) if (q[2] < 0.03) ground.push([q[0], q[1]]);
+      } else if (isSheet(p)) {
         vol = 4 * Math.hypot(...cross(p.u, p.v)) * p.t; c = p.c;
         if (p.c[2] < 0.03) for (const q of corners(p)) ground.push([q[0], q[1]]);
       } else {
@@ -536,17 +1181,18 @@
   }
 
   // Compact transfer format (11 numbers per part) for workers and storage.
-  // Type code: 0 capsule, 1 sheet, +2 when the part is structure.
+  // Type code: 0 capsule, 1 sheet, +2 when the part is structure; 4 triangle, 5 structure triangle.
   const STRIDE = 11;
   function pack(prims) {
     const f = new Float32Array(prims.length * STRIDE);
-    prims.forEach((p, i) => f.set(isSheet(p) ? [p.structure ? 3 : 1, ...p.c, ...p.u, ...p.v, p.t] : [p.structure ? 2 : 0, ...p.a, ...p.b, p.r, 0, 0, 0], i * STRIDE));
+    prims.forEach((p, i) => f.set(isTri(p) ? [p.structure ? 5 : 4, ...p.tri[0], ...p.tri[1], ...p.tri[2], p.t] : isSheet(p) ? [p.structure ? 3 : 1, ...p.c, ...p.u, ...p.v, p.t] : [p.structure ? 2 : 0, ...p.a, ...p.b, p.r, 0, 0, 0], i * STRIDE));
     return f;
   }
   function unpack(f) {
     const out = [];
     for (let i = 0; i < f.length; i += STRIDE) {
       const x = Array.from(f.subarray(i + 1, i + STRIDE));
+      if (f[i] >= 4) { const tp = { tri: [x.slice(0, 3), x.slice(3, 6), x.slice(6, 9)], t: x[9] }; if (f[i] === 5) tp.structure = true; out.push(tp); continue; }
       const part = f[i] % 2 === 1 ? { c: x.slice(0, 3), u: x.slice(3, 6), v: x.slice(6, 9), t: x[9] } : { a: x.slice(0, 3), b: x.slice(3, 6), r: x[6] };
       if (f[i] >= 2) part.structure = true;
       out.push(part);
@@ -563,12 +1209,18 @@
   // Solid fraction per voxel (thin parts spread over neighbouring voxels so their volume is kept).
   function voxelize(all, dx) {
     const prims = all.filter((p) => !p.structure);
+    if (!prims.length) return { frac: new Float32Array(1), n: [1, 1, 1], o: [0, 0, 0], dx, volume: 0, com: [0, 0, 0] };
     const { min, max } = bounds(prims);
     const o = min.map((m) => m - dx), n = max.map((m, i) => Math.max(1, Math.ceil((m + dx - o[i]) / dx)));
     const frac = new Float32Array(n[0] * n[1] * n[2]), R = 0.75 * dx, NORM = 0.589;
     const range = (lo3, hi3) => [[0, 1, 2].map((i) => Math.max(0, Math.floor((lo3[i] - o[i]) / dx))), [0, 1, 2].map((i) => Math.min(n[i] - 1, Math.ceil((hi3[i] - o[i]) / dx)))];
     const soft = (x) => Math.max(0, Math.min(1, x / dx + 0.5));
     for (const p of prims) {
+      if (isTri(p)) {
+        const c = mul(add(add(p.tri[0], p.tri[1]), p.tri[2]), 1 / 3), i = Math.floor((c[0] - o[0]) / dx), j = Math.floor((c[1] - o[1]) / dx), k = Math.floor((c[2] - o[2]) / dx);
+        if (i >= 0 && j >= 0 && k >= 0 && i < n[0] && j < n[1] && k < n[2]) frac[i + n[0] * (j + n[1] * k)] += (0.5 * Math.hypot(...cross(sub(p.tri[1], p.tri[0]), sub(p.tri[2], p.tri[0]))) * p.t) / dx ** 3;
+        continue;
+      }
       if (isSheet(p)) {
         const b = bounds([p]), [lo, hi] = range(b.min.map((m) => m - dx), b.max.map((m) => m + dx));
         const Lu = Math.hypot(...p.u), Lv = Math.hypot(...p.v), uh = mul(p.u, 1 / (Lu || 1)), vh = mul(p.v, 1 / (Lv || 1)), nh = norm(cross(p.u, p.v));
@@ -614,6 +1266,7 @@
       const a = axis === 0 ? i : j;
       lo = Math.min(lo, a); hi = Math.max(hi, a);
     }
+    if (lo === Infinity) return { grid: new Float32Array(1), nh: 1, nz: 1, dx, extent: 0, x0: vox.o[h], z0: vox.o[2] };
     const layer = Math.round(lo + at * (hi - lo)), grid = new Float32Array(nh * nz);
     for (let k = 0; k < nz; k++) for (let b = 0; b < nh; b++) {
       const i = axis === 0 ? layer : b, j = axis === 0 ? b : layer;
@@ -640,12 +1293,14 @@
   // ------------------------------------------------------------------ FDTD -
   // 2D room section (width x height, rigid walls), the projected form placed at (cx, z), a
   // tone burst near a floor corner. Returns the energy decay rate and the absorption length.
-  function roomFor(mount) { return mount === "hanging" ? { w: 6, h: 4, cx: 3.4 } : { w: 6, h: 3.5, cx: 3.4 }; }
+  function roomFor(mount) { return mount === "hanging" ? { w: 6, h: 4, cx: 3.4 } : mount === "wall" ? { w: 6, h: 3.5, cx: 0 } : { w: 6, h: 3.5, cx: 3.4 }; }
 
   function makeSim(pr, sigma, freq, room, mount, opts = {}) {
     const dx = pr.dx, nx = Math.round(room.w / dx), nz = Math.round(room.h / dx), dt = (0.68 * dx) / C0;
     const p = new Float32Array(nx * nz), vx = new Float32Array((nx + 1) * nz), vz = new Float32Array(nx * (nz + 1)), s = new Float32Array(nx * nz);
-    const ox = Math.round((room.cx + pr.x0) / dx), oz = mount === "hanging" ? Math.round((room.h + pr.z0) / dx) : Math.round(pr.z0 / dx);
+    // on a wall the piece's back sits against the left wall of the section, its foot 1 m up
+    const ox = mount === "wall" ? Math.max(0, Math.round(pr.x0 / dx) + 1) : Math.round((room.cx + pr.x0) / dx);
+    const oz = mount === "hanging" ? Math.round((room.h + pr.z0) / dx) : mount === "wall" ? Math.round((1.0 + pr.z0) / dx) : Math.round(pr.z0 / dx);
     for (let k = 0; k < pr.nz; k++) for (let i = 0; i < pr.nh; i++) {
       const X = ox + i, Z = oz + k;
       if (X >= 0 && X < nx && Z >= 0 && Z < nz) s[X + nx * Z] = Math.max(s[X + nx * Z], pr.grid[i + pr.nh * k]);
@@ -737,16 +1392,17 @@
     const vox = voxelize(prims, C0 / BANDS[BANDS.length - 1] / CELLS_PER_WAVE);
     const mass = vox.volume * material.density;
     // Strip method: absorption per metre in two slices per direction, times the extent.
-    const room = roomFor(mount), slices = [];
-    for (const axis of [0, 1]) for (const at of [0.3, 0.7]) slices.push({ axis, sl: slice(vox, axis, at) });
-    const area = BANDS.map((f, bi) => {
+    // On a wall only slices across the wall make sense (the depth profile against the wall).
+    const room = roomFor(mount), slices = [], axes = mount === "wall" ? [0] : [0, 1];
+    for (const axis of axes) for (const at of [0.3, 0.7]) slices.push({ axis, sl: slice(vox, axis, at) });
+    const area = vox.volume === 0 ? BANDS.map(() => 0) : BANDS.map((f, bi) => {
       const factor = 2 ** (BANDS.length - 1 - bi);
-      const perAxis = [0, 1].map((axis) => {
+      const perAxis = axes.map((axis) => {
         const mine = slices.filter((x) => x.axis === axis);
         const mean = mine.reduce((acc, { sl }) => acc + absorptionLength(downsample(sl, factor), material.sigma, f, room, mount).length, 0) / mine.length;
         return mean * mine[0].sl.extent;
       });
-      return (perAxis[0] + perAxis[1]) / 2;
+      return perAxis.reduce((a, x) => a + x, 0) / perAxis.length;
     });
     const w = weights || [1 / 3, 1 / 3, 1 / 3];
     const score = area.reduce((a, x, i) => a + x * w[i], 0);
@@ -754,8 +1410,10 @@
     let fitness = score - (over ? score * (mass / budget - 1) + 0.05 : 0);
     const stance = mount === "standing" ? stability(prims, vox.com, mass, structureDensity) : null;
     if (stance && !stance.ok) fitness -= score * 0.8 * Math.min(1, (MIN_TIP_ANGLE - stance.angle) / MIN_TIP_ANGLE) + 0.05;
+    const printMass = inspect(prims, 0, structureDensity, "wall").printMass;
+    if (RULES[rule].group === "lattice" && printMass > 3 * budget) fitness -= score * (printMass / (3 * budget) - 1);
     return { rule, genes, mount, size, prims, mass, volume: vox.volume, area, score, fitness, perKg: score / Math.max(mass, 1e-6), stance,
-      holdfast: prims.label || null, fieldMap: prims.field || null, cutPlan: prims.cutPlan || null, skinCount: prims.skinCount || 0 };
+      holdfast: prims.label || null, fieldMap: prims.field || null, cutPlan: prims.cutPlan || null, stripPlan: prims.stripPlan || null, skinCount: prims.skinCount || 0, printMass };
   }
 
   // A flat 50 mm panel of the same material and mass on a wall, through the same solver,
@@ -827,11 +1485,12 @@
     for (const v of data) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
     return data.map((v) => (hi > lo ? (v - lo) / (hi - lo) : 0.5));
   };
-  function fieldFromModes({ L, W, H, x0, y0, width, height, nx = 24, nz = 36, fmin = 70, fmax = 200, maxModes = 60, zBase = 0 }) {
+  // ceilingZ: sample a horizontal plane at that height instead (a piece hanging under the ceiling).
+  function fieldFromModes({ L, W, H, x0, y0, width, height, nx = 24, nz = 36, fmin = 70, fmax = 200, maxModes = 60, zBase = 0, ceilingZ = null }) {
     const use = roomModes(L, W, H, fmin, fmax, maxModes), data = new Float32Array(nx * nz);
     for (const { n } of use) for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
-      const x = x0 - width / 2 + (i / (nx - 1)) * width, z = zBase + (k / (nz - 1)) * height;
-      data[i + nx * k] += modeVelocity2(n, L, W, H, x, y0, z);
+      const x = x0 - width / 2 + (i / (nx - 1)) * width, v = k / (nz - 1);
+      data[i + nx * k] += ceilingZ === null ? modeVelocity2(n, L, W, H, x, y0, zBase + v * height) : modeVelocity2(n, L, W, H, x, Math.max(0, Math.min(W, y0 - height / 2 + v * height)), ceilingZ);
     }
     return { data: normalise01(data), nx, nz, width, height, modes: use.map((m) => ({ n: m.n, f: m.f })) };
   }
@@ -893,7 +1552,7 @@
     const tuft = (q, nrm) => { if (out.length < MAX) out.push({ a: q, b: add(q, mul(nrm, len)), r }); };
     const tries = (area) => { const x = area * density; return Math.floor(x) + (rand() < x - Math.floor(x) ? 1 : 0); };
     for (const p of parts) {
-      if (p.structure) continue;
+      if (p.structure || isTri(p)) continue;
       if (isSheet(p)) {
         const nh = norm(cross(p.u, p.v)), area = 8 * Math.hypot(...cross(p.u, p.v));
         for (let k = tries(area); k > 0; k--) {
@@ -936,7 +1595,7 @@
     return next;
   }
 
-  const Growth = { placementMap, sampleLayout, growSkin, SKIN_GENES, roomModes, sampleField, RULES, BANDS, STRIDE, STANCE, MIN_TIP_ANGLE, stability, hull, fieldFromSound, fieldFromModes, solverStep, pack, unpack, count, isSheet, geneCount, grow, voxelize, project, slice, downsample, makeSim, absorptionLength, roomFor, evaluate, panelBaseline, nextGeneration, rng, bounds, envelope };
+  const Growth = { paramValue, patternField, inspect, mapParts, isTri, placementMap, sampleLayout, growSkin, SKIN_GENES, roomModes, sampleField, RULES, BANDS, STRIDE, STANCE, MIN_TIP_ANGLE, stability, hull, fieldFromSound, fieldFromModes, solverStep, pack, unpack, count, isSheet, geneCount, grow, voxelize, project, slice, downsample, makeSim, absorptionLength, roomFor, evaluate, panelBaseline, nextGeneration, rng, bounds, envelope };
   if (typeof module !== "undefined" && module.exports) module.exports = Growth;
   else root.Growth = Growth;
 })(typeof self !== "undefined" ? self : this);

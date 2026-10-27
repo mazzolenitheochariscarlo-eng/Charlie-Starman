@@ -23,17 +23,33 @@ const parts = [{ a: [0, 0, 0], b: [1, 2, 3], r: 0.1 }, { c: [1, 1, 1], u: [0.2, 
 const back = G.unpack(G.pack(parts));
 close(back[1].t, 0.03, 1e-6, "pack keeps sheets"); close(back[0].b[2], 3, 1e-6, "pack keeps capsules");
 
-// Every rule grows inside its envelope, hanging and standing.
-for (const rule of Object.keys(G.RULES)) for (const mount of ["hanging", "standing"]) {
+// Every rule grows inside its envelope: on a wall, hanging from the ceiling and standing.
+for (const rule of Object.keys(G.RULES)) for (const mount of ["hanging", "standing", "wall"]) {
   const genes = Array.from({ length: G.geneCount(rule) }, (_, i) => (i * 0.37) % 1);
   const prims = G.grow(rule, genes, { mount, size: 1.2 });
-  const { min, max } = G.bounds(prims), env = G.envelope(1.2, mount);
-  assert.ok(prims.length >= 3 && prims.length < 6000, `${rule} primitive count ${prims.length}`);
-  const slack = G.RULES[rule].group === "sound" ? 0.5 : G.RULES[rule].group === "hybrid" || mount === "standing" ? 0.081 : 1e-6; // membrane feet reach out sideways // sheets keep their real thickness when scaled
-  assert.ok(max[0] - min[0] <= env.width + slack && max[2] - min[2] <= env.height + slack, `${rule} ${mount} fits`);
+  const { min, max } = G.bounds(prims), env = G.envelope(1.2, mount), R = G.RULES[rule];
+  assert.ok(prims.length >= 3 && prims.length < 80000, `${rule} ${mount} part count ${prims.length}`);
+  const slack = R.group === "sound" ? 0.5 : R.lab ? 0.1 : R.group === "hybrid" || mount !== "hanging" ? 0.081 : 1e-6; // feet reach out; sheets keep their real thickness when scaled
+  assert.ok(max[0] - min[0] <= env.width + slack && max[2] - min[2] <= env.height + slack + (R.lab && mount === "hanging" ? 0.3 : 0), `${rule} ${mount} fits`);
   if (mount === "hanging") close(max[2], 0, slack, `${rule} hangs from the ceiling`);
-  else close(min[2], 0, slack, `${rule} stands on the floor`);
+  else if (mount === "standing") close(min[2], 0, slack, `${rule} stands on the floor`);
+  else assert.ok(min[1] >= -0.02 && max[1] <= env.depth + 0.12 && min[2] >= -0.05, `${rule} sits on the wall (${min[1].toFixed(2)}..${max[1].toFixed(2)} m deep)`);
 }
+// Wall pieces are tested against the wall; a wall evaluation runs.
+const wall = G.evaluate({ rule: "voronoi", genes: Array.from({ length: G.geneCount("voronoi") }, () => 0.5), mount: "wall", size: 1.2, material: { sigma: 20000, density: 60 }, budget: 5 });
+assert.ok(wall.score > 0 && !wall.stance && wall.holdfast, "wall module evaluates");
+// Lattices: struts and shells are print (structure); only their felt infill absorbs.
+const lat = (rule, fill) => { const g = Array.from({ length: G.geneCount(rule) }, () => 0.5); g[7] = fill; return G.evaluate({ rule, genes: g, mount: "wall", size: 1, material: { sigma: 20000, density: 60 }, budget: 5, structureDensity: 1240 }); };
+const empty0 = lat("strutlattice", 0), filled = lat("strutlattice", 1);
+assert.ok(empty0.score < 0.02 && filled.score > empty0.score && filled.printMass > 0, `printed struts alone barely absorb (${empty0.score.toFixed(3)} vs ${filled.score.toFixed(2)} m2 with felt)`);
+const gy = G.grow("tpms", Array.from({ length: G.geneCount("tpms") }, () => 0.2), { mount: "wall", size: 1 });
+assert.ok(gy.filter(G.isTri).length > 1000, "gyroid shell is meshed");
+const gyBack = G.unpack(G.pack(gy));
+assert.ok(gyBack.filter(G.isTri).length === gy.filter(G.isTri).length && gyBack.find(G.isTri).structure, "triangles survive packing");
+// Parameters map genes to real values; geometric fields are normalised.
+close(G.paramValue("voronoi", [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0], 2), 0.2, 1e-9, "parameter value");
+for (const kind of ["attractor", "gradient", "radial", "waves", "noise"]) { const pf = G.patternField({ kind }); assert.ok(Math.max(...pf.data) === 1 && Math.min(...pf.data) === 0, `${kind} field`); }
+console.log(`lab ok: wall voronoi ${wall.area.map((a) => a.toFixed(2)).join("/")} m2, gyroid ${gy.length} parts`);
 
 // The wave solver: an empty room keeps its energy; a porous block absorbs, more material absorbs more.
 const room = G.roomFor("standing");

@@ -65,6 +65,23 @@ one-person module mass, flat-pack transport and reuse across many events.
   from the walls) from which layouts A, B and C are drawn by chance and shown in the 3D room. After
   the "probabilistic programme" of Biothing's tower project. Positions do not change the Sabine echo.
 - The **seed library** can be saved as a file after one exhibition and loaded at the next venue.
+- **Floor, wall or ceiling** for every generator, or **All 3** in one run. Wall pieces are pressed into
+  a relief no deeper than the wall envelope and tested against the wall; seeds are kept per place, and
+  in the room wall modules line the walls, ceiling modules hang under the ceiling.
+- **The graph** (like Grasshopper or nTop): every single generator opens as a chain of nodes (seed and
+  place, field, the rule's values grouped as cell / response to the field / holdfast, material,
+  evolve). Drag a value and the 3D preview regrows; lock it, or set the range evolution may explore;
+  set population, generations, mutation and a repeatable random seed. *Test* runs the wave
+  simulator on the exact form, *Keep* adds it, *Watch it grow* replays the order it grew in. Fields
+  can come from sound or be drawn (attractor point, gradient, rings, two interfering waves, noise).
+- **Patterns and lattices**: Voronoi cells (open cells, funnels, stepped web), felt petals on sunflower
+  spirals, slotted felt strips (egg-crate, with a strip cut file), strut lattices (cubic,
+  body-centred, octet, diamond, honeycomb; graded and wavy), minimal surfaces (gyroid, Schwarz P,
+  diamond; marching tetrahedra), spatial lattices filling a column-into-canopy or a cloud, 3D cellular
+  automata (coral, sponge, crystal rules), liquid bioforms (blended blobs, or pulls stretched out of a
+  slab, as a heat-formed felt shell with holes) and agent fibres (a flocking swarm whose trails become
+  a mat of soft cords with hooked tufts). Printed struts and shells barely absorb (their gaps are far
+  too big to rub the air), so lattices carry felt; every form also exports a 1:1 front drawing (SVG).
 - **Spaces**: exhibition areas as 3D models (ready-made rooms, or your own `.obj` exports).
   Set the finishes and visitor count, place grown shapes, and compare reverberation time
   with the recommended value and the drop in crowd noise.

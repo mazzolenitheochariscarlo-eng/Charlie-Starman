@@ -131,6 +131,24 @@ tr.current td { background: var(--panel-2); }
 .fam-item[aria-pressed="true"] { border-color: var(--accent); background: var(--raised); }
 .fam-item small { color: var(--muted); font-size: 11px; }
 .silhouette { width: 100%; height: auto; max-height: 130px; }
+.graph { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 26px; overflow-x: auto; padding: 4px 2px 10px; }
+.node { position: relative; display: grid; gap: 8px; align-content: start; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--app); min-width: 0; }
+.node h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.node + .node::before { content: ""; position: absolute; left: -27px; top: 18px; width: 26px; height: 2px; background: var(--accent); }
+.node + .node::after { content: ""; position: absolute; left: -5px; top: 15px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.prm { display: grid; gap: 3px; }
+.prm-head { display: flex; gap: 6px; align-items: baseline; font-size: 12px; }
+.prm-head span { flex: 1; min-width: 0; }
+.prm input[type="range"], .prm select, .prm input[type="number"], .node select { width: 100%; min-width: 0; }
+.prm.locked { opacity: 0.6; }
+.lock { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 10px; font-size: 10px; padding: 0 6px; cursor: pointer; }
+.lock[aria-pressed="true"] { border-color: var(--accent); color: var(--ink); }
+.rng { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.rng small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; }
+.growbar { display: flex; gap: 10px; align-items: center; margin: 6px 0; }
+.growbar input { flex: 1; }
+.rowc { display: flex; gap: 6px; align-items: center; }
+@media (max-width: 700px) { .graph { grid-auto-flow: row; grid-auto-columns: auto; } .node + .node::before { left: 18px; top: -27px; width: 2px; height: 26px; } .node + .node::after { left: 15px; top: -5px; } }
 .primer { margin: 4px 0 6px; }
 .primer summary { cursor: pointer; font-weight: 600; }
 .primer ol { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 6px; }
@@ -874,6 +892,17 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
   const sheetT = (u) => lerp(0.015, 0.08, u);
   const mmT = (u) => Math.round(sheetT(u) * 1000) + " mm";
   const isSheet = (p) => p.c !== undefined;
+  const isTri = (p) => p.tri !== undefined;
+  // Apply an affine point map to every part (sheets: centre and edge vectors; triangles: corners).
+  function mapParts(parts, fn) {
+    const out = parts.map((p) => {
+      if (isTri(p)) return { ...p, tri: p.tri.map(fn) };
+      if (isSheet(p)) { const c = fn(p.c); return { ...p, c, u: sub(fn(add(p.c, p.u)), c), v: sub(fn(add(p.c, p.v)), c) }; }
+      return { ...p, a: fn(p.a), b: fn(p.b) };
+    });
+    for (const k of ["label", "field", "cutPlan", "stripPlan"]) if (parts[k] !== undefined) out[k] = parts[k];
+    return out;
+  }
 
   const RULES = {
     tree: {
@@ -1226,6 +1255,614 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     },
   };
 
+  // ======================================================= pattern lab ======
+  // Generators for modules that can go on a wall, hang from the ceiling or stand on the floor, with a
+  // parameter schema (`params`) so the designer can drive every value by hand, lock it, or give
+  // evolution a range to explore (a graph like Grasshopper or nTop). All are graded by a field.
+  // Geometry is built in a "wall frame": the face is x (across, centred) by z (up, 0..Hm), the depth
+  // grows out along +y from y = 0. mountPattern then puts it on the wall, the ceiling or the floor.
+  const opt = (label, options, node) => ({ label, options, node });
+  const num = (label, min, max, unit, node, round) => ({ label, min, max, unit, node, round });
+  function paramValue(rule, g, i) {
+    const p = RULES[rule].params[i], x = Math.max(0, Math.min(1, g[i]));
+    if (p.options) return Math.min(p.options.length - 1, Math.floor(x * p.options.length));
+    const v = lerp(p.min, p.max, x);
+    return p.round ? Math.round(v) : v;
+  }
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  function frameOf(env, mount) {
+    const W = env.width, Hm = mount === "standing" ? env.height - 0.1 : mount === "hanging" ? env.width : env.height;
+    return { W, Hm };
+  }
+  function fieldFn(field, W, Hm, gamma) {
+    const F = field || flatField;
+    return (x, z) => Math.pow(clamp01(sampleField(F.data, F.nx, F.nz, x / W + 0.5, z / Hm)), gamma);
+  }
+  function mountPattern(parts, mount, { W, Hm, depth, mirror = true, feet = 2, footLen = 0.3 }) {
+    if (mount === "wall") {
+      parts.push({ c: [0, -0.006, Hm * 0.75], u: [W * 0.4, 0, 0], v: [0, 0, 0.04], t: 0.012, structure: true });
+      parts.label = "a wall cleat behind";
+      return parts;
+    }
+    if (mount === "hanging") {
+      const drop = 0.25, out = mapParts(parts, (q) => [q[0], q[2] - Hm / 2, -drop - q[1]]);
+      for (const sx of [-1, 1]) for (const sy of [-1, 1]) out.push({ a: [(sx * W) / 3, (sy * Hm) / 3, 0], b: [(sx * W) / 3, (sy * Hm) / 3, -drop], r: 0.003, structure: true });
+      out.label = "4 hanging cables";
+      return out;
+    }
+    let out = mirror ? mapParts(parts, (q) => [q[0], q[1] + 0.0045, q[2]]) : mapParts(parts, (q) => [q[0], q[1] - depth / 2, q[2]]);
+    if (mirror) out = out.concat(mapParts(out, (q) => [q[0], -q[1], q[2]]));
+    out = mapParts(out, (q) => [q[0], q[1], q[2] + 0.1]);
+    if (mirror) out.push({ c: [0, 0, 0.1 + Hm / 2], u: [W / 2, 0, 0], v: [0, 0, Hm / 2], t: 0.009, structure: true });
+    out.label = footings(out, planCurve(0, 0, W), W, Hm + 0.1, feet, footLen, false);
+    return out;
+  }
+  // Cell boundaries along a length, each cell as large as sizeAt(fraction) says, stretched to fit exactly.
+  function warp1D(len, sizeAt) {
+    const b = [0];
+    let x = 0;
+    while (x < len - 1e-9 && b.length < 400) { x += Math.max(0.01, sizeAt(Math.min(1, x / len))); b.push(x); }
+    if (b.length < 2) b.push(len);
+    const k = len / b[b.length - 1];
+    return b.map((v) => v * k);
+  }
+  const atWarp = (b, u) => { const i = Math.max(0, Math.min(b.length - 2, Math.floor(u))); return b[i] + (b[i + 1] - b[i]) * (u - i); };
+  const invWarp = (b, x) => { let i = 0; while (i < b.length - 2 && b[i + 1] < x) i++; return i + (x - b[i]) / (b[i + 1] - b[i] || 1); };
+
+  // 2D Voronoi cells in a rectangle (half-plane clipping, nearest seeds first).
+  function clipPoly(poly, nx, nz, c) {
+    const out = [];
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length], da = nx * a[0] + nz * a[1] - c, db = nx * b[0] + nz * b[1] - c;
+      if (da <= 0) out.push(a);
+      if ((da < 0) !== (db < 0) && da !== db) { const t = da / (da - db); out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]); }
+    }
+    return out;
+  }
+  function voronoiCells(pts, x0, x1, z0, z1) {
+    return pts.map((p, i) => {
+      let poly = [[x0, z0], [x1, z0], [x1, z1], [x0, z1]];
+      const others = pts.map((q, j) => [j, (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2]).filter(([j]) => j !== i).sort((a, b) => a[1] - b[1]);
+      for (const [j, d2] of others) {
+        let R2 = 0;
+        for (const v of poly) R2 = Math.max(R2, (v[0] - p[0]) ** 2 + (v[1] - p[1]) ** 2);
+        if (d2 > 4 * R2) break;
+        const q = pts[j];
+        poly = clipPoly(poly, q[0] - p[0], q[1] - p[1], (q[0] * q[0] + q[1] * q[1] - p[0] * p[0] - p[1] * p[1]) / 2);
+        if (poly.length < 3) break;
+      }
+      return poly;
+    });
+  }
+  // Seeds over the face: relaxed (spacing follows the field), honeycomb (graded hex rows) or a sunflower spiral.
+  function faceSeeds(kind, W, Hm, sizeAt, rand) {
+    const pts = [], inRect = (x, z) => x > -W / 2 && x < W / 2 && z > 0 && z < Hm;
+    if (kind === 1) {
+      const rows = warp1D(Hm, (v) => sizeAt(0, v * Hm) * 0.87);
+      rows.forEach((z, j) => {
+        if (j === rows.length - 1) return;
+        const zc = (z + rows[j + 1]) / 2, cols = warp1D(W, (u) => sizeAt(-W / 2 + u * W, zc));
+        for (let i = 0; i < cols.length - 1; i++) { const x = -W / 2 + (cols[i] + cols[i + 1]) / 2 + (j % 2 ? (cols[i + 1] - cols[i]) / 2 : 0); if (inRect(x, zc)) pts.push([x, zc]); }
+      });
+      return pts;
+    }
+    if (kind === 2) {
+      const golden = Math.PI * (3 - Math.sqrt(5)), cx = 0, cz = Hm / 2;
+      let A = 0;
+      for (let k = 0; k < 600; k++) {
+        const r = Math.sqrt(A / Math.PI), th = k * golden, x = cx + r * Math.cos(th), z = cz + r * Math.sin(th);
+        if (r > Math.hypot(W, Hm) / 2) break;
+        const s = sizeAt(Math.max(-W / 2, Math.min(W / 2, x)), Math.max(0, Math.min(Hm, z)));
+        A += s * s * 0.9;
+        if (inRect(x, z)) pts.push([x, z]);
+      }
+      return pts;
+    }
+    for (let t = 0; t < 5000 && pts.length < 400; t++) {
+      const x = (rand() - 0.5) * W, z = rand() * Hm, s = sizeAt(x, z);
+      if (pts.every((q) => Math.hypot(q[0] - x, q[1] - z) > s * 0.5 + sizeAt(q[0], q[1]) * 0.5)) pts.push([x, z]);
+    }
+    return pts;
+  }
+  // A face quad (parallelogram) through four points given in (x, y, z), as a sheet of thickness t.
+  const quad = (A, B, C, D, t, extra) => ({ c: mul(add(add(A, B), add(C, D)), 0.25), u: mul(add(sub(B, A), sub(C, D)), 0.25), v: mul(add(sub(D, A), sub(C, B)), 0.25), t, ...extra });
+
+  // Unit cells of strut lattices as bonds in the unit cube.
+  const UNIT = (() => {
+    const corners = [];
+    for (const a of [0, 1]) for (const b of [0, 1]) for (const c of [0, 1]) corners.push([a, b, c]);
+    const faces = [[0.5, 0.5, 0], [0.5, 0.5, 1], [0.5, 0, 0.5], [0.5, 1, 0.5], [0, 0.5, 0.5], [1, 0.5, 0.5]];
+    const make = (pts, L) => { const out = []; for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) if (Math.abs(Math.hypot(...sub(pts[i], pts[j])) - L) < 1e-6) out.push([pts[i], pts[j]]); return out; };
+    return [make(corners, 1), make([...corners, [0.5, 0.5, 0.5]], Math.sqrt(3) / 2), make([...corners, ...faces], Math.SQRT1_2),
+      make([...corners, ...faces, [0.25, 0.25, 0.25], [0.25, 0.75, 0.75], [0.75, 0.25, 0.75], [0.75, 0.75, 0.25]], Math.sqrt(3) / 4)];
+  })();
+  // Struts of a lattice on warped cells. map(u, v, w) gives a point in metres from cell coordinates;
+  // keep(p) can drop struts (an envelope); radius(p) grades them. Type 4 is a honeycomb with rungs.
+  function latticeStruts(type, nu, nv, nw, map, keep, radius) {
+    const seen = new Set(), out = [], key = (p) => p.map((x) => Math.round(x * 4)).join(",");
+    const strut = (P, Q) => {
+      const k1 = key(P), k2 = key(Q), k = k1 < k2 ? k1 + "|" + k2 : k2 + "|" + k1;
+      if (seen.has(k)) return;
+      seen.add(k);
+      const a = map(...P), b = map(...Q);
+      if (keep && (!keep(a) || !keep(b))) return;
+      out.push({ a, b, r: radius(mul(add(a, b), 0.5)), structure: true });
+    };
+    if (type === 4) {
+      const s3 = Math.sqrt(3), verts = new Map();
+      for (let j = -1; j <= Math.ceil(nw / 1.5) + 1; j++) for (let i = -1; i <= Math.ceil(nu / s3) + 1; i++) {
+        const cx = s3 * (i + (j & 1) / 2), cz = 1.5 * j;
+        for (let e = 0; e < 6; e++) {
+          const a1 = Math.PI / 6 + (e * Math.PI) / 3, a2 = a1 + Math.PI / 3;
+          const p = [(cx + Math.cos(a1)) / s3 * 1, (cz + Math.sin(a1)) / 1.5], q = [(cx + Math.cos(a2)) / s3, (cz + Math.sin(a2)) / 1.5];
+          if ([p, q].some(([u, w]) => u < -1e-6 || u > nu + 1e-6 || w < -1e-6 || w > nw + 1e-6)) continue;
+          for (let v = 0; v <= nv; v++) strut([p[0], v, p[1]], [q[0], v, q[1]]);
+          verts.set(key([p[0], 0, p[1]]), p);
+        }
+      }
+      for (const p of verts.values()) for (let v = 0; v < nv; v++) strut([p[0], v, p[1]], [p[0], v + 1, p[1]]);
+      return out;
+    }
+    const bonds = UNIT[type];
+    for (let k = 0; k < nw; k++) for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) for (const [A, B] of bonds) strut([i + A[0], j + A[1], k + A[2]], [i + B[0], j + B[1], k + B[2]]);
+    return out;
+  }
+  // Triply periodic minimal surfaces (value 0 is the surface) and their largest value, in cell coordinates.
+  const TPMS = [
+    { f: (X, Y, Z) => Math.sin(X) * Math.cos(Y) + Math.sin(Y) * Math.cos(Z) + Math.sin(Z) * Math.cos(X), max: 1.5 },
+    { f: (X, Y, Z) => Math.cos(X) + Math.cos(Y) + Math.cos(Z), max: 3 },
+    { f: (X, Y, Z) => Math.sin(X) * Math.sin(Y) * Math.sin(Z) + Math.sin(X) * Math.cos(Y) * Math.cos(Z) + Math.cos(X) * Math.sin(Y) * Math.cos(Z) + Math.cos(X) * Math.cos(Y) * Math.sin(Z), max: 1.42 },
+  ];
+  // Marching tetrahedra over a grid: triangles of the surface value(x, y, z) = 0.
+  function isoTriangles(value, x0, y0, z0, hx, hy, hz, nx, ny, nz, keepTri) {
+    const V = new Float32Array((nx + 1) * (ny + 1) * (nz + 1)), id = (i, j, k) => i + (nx + 1) * (j + (ny + 1) * k), P = (i, j, k) => [x0 + i * hx, y0 + j * hy, z0 + k * hz];
+    for (let k = 0; k <= nz; k++) for (let j = 0; j <= ny; j++) for (let i = 0; i <= nx; i++) V[id(i, j, k)] = value(...P(i, j, k));
+    const C = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]];
+    const TETS = [[0, 5, 1, 6], [0, 1, 2, 6], [0, 2, 3, 6], [0, 3, 7, 6], [0, 7, 4, 6], [0, 4, 5, 6]], out = [];
+    const cut = (pa, va, pb, vb) => { const t = va / (va - vb); return [pa[0] + (pb[0] - pa[0]) * t, pa[1] + (pb[1] - pa[1]) * t, pa[2] + (pb[2] - pa[2]) * t]; };
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const cv = C.map((c) => V[id(i + c[0], j + c[1], k + c[2])]);
+      if (cv.every((v) => v < 0) || cv.every((v) => v >= 0)) continue;
+      const cp = C.map((c) => P(i + c[0], j + c[1], k + c[2]));
+      for (const T of TETS) {
+        const ins = T.filter((q) => cv[q] < 0), outs = T.filter((q) => cv[q] >= 0);
+        if (!ins.length || !outs.length) continue;
+        if (ins.length === 1 || outs.length === 1) {
+          const lone = ins.length === 1 ? ins[0] : outs[0], rest = ins.length === 1 ? outs : ins;
+          out.push(rest.map((q) => cut(cp[lone], cv[lone], cp[q], cv[q])));
+        } else {
+          const [a, b] = ins, [c, d] = outs, p1 = cut(cp[a], cv[a], cp[c], cv[c]), p2 = cut(cp[a], cv[a], cp[d], cv[d]), p3 = cut(cp[b], cv[b], cp[d], cv[d]), p4 = cut(cp[b], cv[b], cp[c], cv[c]);
+          out.push([p1, p2, p3], [p1, p3, p4]);
+        }
+      }
+    }
+    return keepTri ? out.filter(keepTri) : out;
+  }
+
+  const CELL = "Cell", RESP = "Response to the field", HOLD = "Holdfast (freestanding)";
+  const holdParams = [opt("Feet", ["2 feet", "3 feet", "4 feet"], HOLD), num("Foot length", 0.15, 0.45, "cm", HOLD)];
+  const LAB = {
+    voronoi: {
+      group: "pattern", lab: true, direct: true, mounts: true, name: "Voronoi cells", imitates: "cracked mud, giraffe skin, dragonfly wings, foam, the cells of plant tissue",
+      idea: "The face is divided into cells, each the area closest to one seed. Where sound is strong the cells grow smaller and deeper, so there are more felt walls and edges there.",
+      params: [opt("Seeds", ["relaxed", "honeycomb", "sunflower spiral"], CELL), opt("Style", ["open cells", "funnels", "stepped web"], CELL),
+        num("Cell size where sound is strong", 0.05, 0.2, "cm", RESP), num("Cell size where calm", 0.12, 0.4, "cm", RESP),
+        num("Depth where calm", 0.02, 0.15, "cm", RESP), num("Depth where sound is strong", 0.05, 0.3, "cm", RESP),
+        num("Opening (funnel or web hole)", 0.1, 0.8, "%", CELL), num("Felt thickness", 0.005, 0.02, "mm", CELL), opt("Back", ["open back", "felt back"], CELL),
+        num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) {
+        const v = (i) => paramValue("voronoi", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), rand = rng(seedOf(g));
+        const style = v(1), cMin = v(2), cMax = Math.max(v(2), v(3)), dLo = v(4), dHi = Math.min(ctx.env.depth || 0.3, Math.max(v(4), v(5))), open = v(6), t = v(7), f = fieldFn(ctx.field, W, Hm, v(9));
+        const sizeAt = (x, z) => lerp(cMax, cMin, f(x, z));
+        const seeds = faceSeeds(v(0), W, Hm, sizeAt, rand), cells = voronoiCells(seeds, -W / 2, W / 2, 0, Hm), parts = [];
+        const P3 = (q, y) => [q[0], y, q[1]];
+        const edges = new Map();
+        cells.forEach((poly, i) => {
+          if (poly.length < 3) return;
+          const s = seeds[i], fi = f(s[0], s[1]), d = lerp(dLo, dHi, fi), n = poly.length;
+          const hole = poly.map((q) => [s[0] + (q[0] - s[0]) * open, s[1] + (q[1] - s[1]) * open]);
+          for (let e = 0; e < n; e++) {
+            const a = poly[e], b = poly[(e + 1) % n];
+            if (style === 0) {
+              const k = [a, b].map((q) => q.map((x) => Math.round(x * 2000)).join(",")).sort().join("|");
+              if (!edges.has(k) || edges.get(k).d < d) edges.set(k, { a, b, d });
+            } else if (style === 1) parts.push(quad(P3(hole[e], 0), P3(hole[(e + 1) % n], 0), P3(b, d), P3(a, d), t));
+            else for (let L = 0; L < 3; L++) {
+              const sc = 1 - ((1 - open) * (L + 1)) / 3, hA = [s[0] + (a[0] - s[0]) * sc, s[1] + (a[1] - s[1]) * sc], hB = [s[0] + (b[0] - s[0]) * sc, s[1] + (b[1] - s[1]) * sc];
+              const y = d * (1 - (L + 0.5) / 3);
+              parts.push(quad(P3(a, y), P3(b, y), P3(hB, y), P3(hA, y), d / 3));
+            }
+          }
+        });
+        for (const { a, b, d } of edges.values()) parts.push(quad(P3(a, 0), P3(b, 0), P3(b, d), P3(a, d), t));
+        if (v(8) === 1 || style === 1) parts.push({ c: [0, -t / 2, Hm / 2], u: [W / 2, 0, 0], v: [0, 0, Hm / 2], t });
+        return mountPattern(parts, mount, { W, Hm, depth: dHi, feet: 2 + v(10), footLen: v(11) });
+      },
+      describe(g) { const v = (i) => paramValue("voronoi", g, i); return `${["Relaxed", "Honeycomb", "Sunflower"][v(0)]} Voronoi ${["open cells", "funnels", "stepped web"][v(1)]}, cells ${Math.round(v(2) * 100)}-${Math.round(Math.max(v(2), v(3)) * 100)} cm, ${Math.round(v(4) * 100)}-${Math.round(Math.max(v(4), v(5)) * 100)} cm deep, ${Math.round(v(7) * 1000)} mm felt.`; },
+    },
+    petals: {
+      group: "pattern", lab: true, direct: true, mounts: true, name: "Felt petals", imitates: "sunflower heads, artichokes, succulents, scales of a cone",
+      idea: "Felt petals on sunflower spirals, larger towards the edge. Where sound is strong they open further out of the face, so both faces of every petal catch sound.",
+      params: [opt("Spiral centres", ["1 centre", "2 centres", "3 centres"], CELL), num("Petals", 60, 400, "", CELL, true),
+        num("Petal length at the centre", 0.04, 0.15, "cm", CELL), num("Petal length at the edge", 0.08, 0.3, "cm", CELL), num("Width / length", 0.3, 0.9, "%", CELL),
+        num("Opening where calm", 5, 45, "°", RESP), num("Opening where sound is strong", 30, 85, "°", RESP), num("Curl", 0, 60, "°", CELL),
+        num("Felt thickness", 0.003, 0.012, "mm", CELL), opt("Back", ["open back", "felt back"], CELL), num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) {
+        const v = (i) => paramValue("petals", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(10));
+        const nC = 1 + v(0), count = v(1), Lc = v(2), Le = Math.max(v(2), v(3)), ratio = v(4), oLo = v(5), oHi = Math.max(v(5), v(6)), curl = (v(7) * Math.PI) / 180, t = v(8);
+        // spiral centres at the strongest places of the field, kept apart
+        const cand = [];
+        for (let i = 0; i < 9; i++) for (let k = 0; k < 9; k++) { const x = -W / 2 + ((i + 0.5) / 9) * W, z = ((k + 0.5) / 9) * Hm; cand.push([x, z, f(x, z)]); }
+        cand.sort((a, b) => b[2] - a[2]);
+        const centres = [];
+        for (const c of cand) if (centres.length < nC && centres.every((q) => Math.hypot(q[0] - c[0], q[1] - c[1]) > Math.min(W, Hm) * 0.4)) centres.push(c);
+        const golden = Math.PI * (3 - Math.sqrt(5)), R = Math.hypot(W, Hm) / (2 * Math.sqrt(nC)), per = Math.ceil(count / nC), parts = [], depthMax = [0];
+        for (const C of centres) for (let k = 1; k <= per; k++) {
+          const fr = Math.sqrt(k / per), x = C[0] + R * fr * Math.cos(k * golden), z = C[1] + R * fr * Math.sin(k * golden);
+          if (x < -W / 2 || x > W / 2 || z < 0 || z > Hm) continue;
+          if (centres.some((o) => o !== C && Math.hypot(o[0] - x, o[1] - z) < Math.hypot(C[0] - x, C[1] - z))) continue;
+          const L = lerp(Lc, Le, fr), w = L * ratio, ang = ((lerp(oLo, oHi, f(x, z)) * Math.PI) / 180), dl = Math.hypot(x - C[0], z - C[1]) || 1;
+          const dir = [(x - C[0]) / dl, 0, (z - C[1]) / dl], side = [dir[2], 0, -dir[0]], Y = [0, 1, 0];
+          const e1 = add(mul(dir, Math.cos(ang)), mul(Y, Math.sin(ang))), a2 = Math.min(Math.PI * 0.95, ang + curl), e2 = add(mul(dir, Math.cos(a2)), mul(Y, Math.sin(a2)));
+          const p0 = [x, t, z], p1 = add(p0, mul(e1, L / 2));
+          parts.push({ c: add(p0, mul(e1, L / 4)), u: mul(e1, L / 4), v: mul(side, w / 2), t });
+          parts.push({ c: add(p1, mul(e2, L / 4)), u: mul(e2, L / 4), v: mul(side, w * 0.3), t });
+          depthMax[0] = Math.max(depthMax[0], L * Math.sin(ang));
+        }
+        if (v(9) === 1) parts.push({ c: [0, t / 2, Hm / 2], u: [W / 2, 0, 0], v: [0, 0, Hm / 2], t });
+        return mountPattern(parts, mount, { W, Hm, depth: depthMax[0], feet: 2 + v(11), footLen: v(12) });
+      },
+      describe(g) { const v = (i) => paramValue("petals", g, i); return `${v(1)} felt petals ${Math.round(v(8) * 1000)} mm thick on ${1 + v(0)} spiral${v(0) ? "s" : ""}, ${Math.round(v(2) * 100)}-${Math.round(Math.max(v(2), v(3)) * 100)} cm long, opening ${Math.round(v(5))}-${Math.round(Math.max(v(5), v(6)))}°.`; },
+    },
+    strips: {
+      group: "pattern", lab: true, direct: true, mounts: true, name: "Slotted felt strips", imitates: "the gills of a bracket fungus, honeycomb walls, an egg-crate",
+      idea: "Flat felt strips slotted into each other like an egg-crate: a 3D lattice made only from 2D cuts. Strips are closer and deeper where sound is strong. Flat-packs for touring.",
+      params: [opt("Pattern", ["square", "diagonal"], CELL), num("Spacing where sound is strong", 0.05, 0.2, "cm", RESP), num("Spacing where calm", 0.1, 0.35, "cm", RESP),
+        num("Depth where calm", 0.03, 0.15, "cm", RESP), num("Depth where sound is strong", 0.06, 0.3, "cm", RESP), num("Felt thickness", 0.004, 0.015, "mm", CELL),
+        num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) {
+        const v = (i) => paramValue("strips", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(6));
+        const sLo = v(1), sHi = Math.max(v(1), v(2)), dLo = v(3), dHi = Math.min(ctx.env.depth || 0.3, Math.max(v(3), v(4))), t = v(5), diag = v(0) === 1;
+        const col = (u) => { let s = 0; for (let k = 0; k < 8; k++) s += f(-W / 2 + u * W, ((k + 0.5) / 8) * Hm); return s / 8; };
+        const row = (w) => { let s = 0; for (let k = 0; k < 8; k++) s += f(-W / 2 + ((k + 0.5) / 8) * W, w * Hm); return s / 8; };
+        const depth = (x, z) => lerp(dLo, dHi, f(x, z)), parts = [], strips = [];
+        const xs = warp1D(W, (u) => lerp(sHi, sLo, col(u))).map((x) => x - W / 2), zs = warp1D(Hm, (w) => lerp(sHi, sLo, row(w)));
+        const seg = (A, B, name) => {
+          const m = mul(add(A, B), 0.5), d = depth(m[0], m[1]);
+          parts.push({ c: [m[0], d / 2, m[1]], u: [(B[0] - A[0]) / 2, 0, (B[1] - A[1]) / 2], v: [0, d / 2, 0], t });
+          return d;
+        };
+        if (!diag) {
+          xs.forEach((x, i) => { if (i === 0 || i === xs.length - 1) return; const hs = []; for (let k = 0; k < zs.length - 1; k++) hs.push(seg([x, zs[k]], [x, zs[k + 1]])); strips.push({ name: "V" + i, along: zs, heights: hs, slotsFrom: "back" }); });
+          zs.forEach((z, k) => { const hs = []; for (let i = 0; i < xs.length - 1; i++) hs.push(seg([xs[i], z], [xs[i + 1], z])); strips.push({ name: "H" + (k + 1), along: xs.map((x) => x + W / 2), heights: hs, slotsFrom: "front" }); });
+        } else {
+          // two families of lines at +-45 degrees, cut where they leave the face
+          const step = (sLo + sHi) / 2, inside = (q) => q[0] >= -W / 2 - 1e-9 && q[0] <= W / 2 + 1e-9 && q[1] >= -1e-9 && q[1] <= Hm + 1e-9;
+          for (const sg of [1, -1]) for (let c = -W - Hm; c <= W + Hm; c += step) {
+            const pts = [];
+            for (let s2 = -W - Hm; s2 <= W + Hm; s2 += step) { const q = [(c + s2) / 2, sg * (s2 - c) / 2 + Hm / 2]; pts.push(q); }
+            for (let k = 0; k < pts.length - 1; k++) if (inside(pts[k]) && inside(pts[k + 1])) seg(pts[k], pts[k + 1]);
+          }
+        }
+        const out = mountPattern(parts, mount, { W, Hm, depth: dHi, feet: 2 + v(7), footLen: v(8) });
+        if (!diag) out.stripPlan = { t, strips, W, Hm };
+        return out;
+      },
+      describe(g) { const v = (i) => paramValue("strips", g, i); return `${v(0) ? "Diagonal" : "Square"} egg-crate of ${Math.round(v(5) * 1000)} mm felt strips, ${Math.round(v(1) * 100)}-${Math.round(Math.max(v(1), v(2)) * 100)} cm apart, ${Math.round(v(3) * 100)}-${Math.round(Math.max(v(3), v(4)) * 100)} cm deep.`; },
+    },
+    strutlattice: {
+      group: "lattice", lab: true, direct: true, mounts: true, name: "Strut lattice", imitates: "spongy bone, the Venus flower basket sponge, radiolarians",
+      idea: "A printed lattice of thin struts, cells smaller and struts thicker where sound is strong, its surface rising and falling with the field. The struts alone hardly absorb (their gaps are far too big to rub the air): felt balls in the cells do the absorbing.",
+      params: [opt("Cell type", ["cubic", "body-centred", "octet", "diamond", "honeycomb"], CELL), num("Cell size where sound is strong", 0.04, 0.12, "cm", RESP), num("Cell size where calm", 0.06, 0.25, "cm", RESP),
+        num("Strut radius where calm", 0.001, 0.004, "mm", RESP), num("Strut radius where sound is strong", 0.002, 0.008, "mm", RESP), num("Lattice depth", 0.05, 0.3, "cm", CELL),
+        num("Surface wave", 0, 0.8, "%", RESP), num("Cells filled with felt", 0, 1, "%", RESP), num("Felt ball size", 0.3, 0.9, "%", CELL), num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) { return buildLattice("strutlattice", g, ctx, false); },
+      describe(g) { const v = (i) => paramValue("strutlattice", g, i); return `A ${["cubic", "body-centred", "octet", "diamond", "honeycomb"][v(0)]} lattice, cells ${Math.round(v(1) * 100)}-${Math.round(Math.max(v(1), v(2)) * 100)} cm, ${Math.round(v(5) * 100)} cm deep, ${Math.round(v(7) * 100)}% of cells filled with felt.`; },
+    },
+    tpms: {
+      group: "lattice", lab: true, direct: true, mounts: true, name: "Minimal surface (TPMS)", imitates: "butterfly wing scales (gyroids), sea urchin skeletons, cell membranes",
+      idea: "A continuous curved printed shell that splits space into two interwoven labyrinths, graded by the field. The shell itself barely absorbs; felt balls in one labyrinth do, densest where sound is strong.",
+      params: [opt("Surface", ["gyroid", "Schwarz P", "diamond"], CELL), num("Cell size where sound is strong", 0.05, 0.12, "cm", RESP), num("Cell size where calm", 0.08, 0.25, "cm", RESP),
+        num("Shell thickness where calm", 0.0008, 0.003, "mm", RESP), num("Shell thickness where sound is strong", 0.001, 0.005, "mm", RESP), num("Lattice depth", 0.06, 0.3, "cm", CELL),
+        num("Surface wave", 0, 0.8, "%", RESP), num("Cells filled with felt", 0, 1, "%", RESP), num("Felt ball size", 0.3, 0.9, "%", CELL), num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) { return buildLattice("tpms", g, ctx, true); },
+      describe(g) { const v = (i) => paramValue("tpms", g, i); return `A ${["gyroid", "Schwarz P", "diamond"][v(0)]} shell, cells ${Math.round(v(1) * 100)}-${Math.round(Math.max(v(1), v(2)) * 100)} cm, ${Math.round(v(5) * 100)} cm deep, ${Math.round(v(7) * 100)}% of its labyrinth filled with felt.`; },
+    },
+    spatial: {
+      group: "lattice", lab: true, direct: true, mounts: true, name: "Spatial lattice", imitates: "Biothing's robotically printed clouds and pergolas, coral heads, a tree flaring into its canopy",
+      idea: "A printed strut lattice that fills a grown body: a column that flares into a canopy, or a cloud. The body grows widest where sound is strong; felt pockets inside do the absorbing.",
+      params: [opt("Body", ["column into canopy", "cloud"], CELL), opt("Cell type", ["cubic", "body-centred", "octet", "diamond"], CELL), num("Cell size", 0.05, 0.16, "cm", CELL),
+        num("Strut radius", 0.0015, 0.006, "mm", CELL), num("Base or waist", 0.15, 0.5, "%", CELL), num("Flare or bulge", 0, 1, "%", RESP), num("Twist", 0, 90, "°", CELL),
+        num("Cells filled with felt", 0, 1, "%", RESP), num("Felt ball size", 0.3, 0.9, "%", CELL), num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+      build(g, down, ctx) {
+        const v = (i) => paramValue("spatial", g, i), mount = ctx.mount, env = ctx.env, W = env.width, H = mount === "standing" ? env.height : mount === "hanging" ? env.width : env.height;
+        const f = fieldFn(ctx.field, W, H, v(9)), body = v(0), a = v(2), waist = v(4), flare = v(5), twist = (v(6) * Math.PI) / 180;
+        const fz = (z) => { let s = 0; for (let k = 0; k < 6; k++) s += f(-W / 2 + ((k + 0.5) / 6) * W, z); return s / 6; };
+        // radius of the body at height z (0 at the floor or ceiling attachment, H at the far end)
+        const radius = (z) => {
+          const u = z / H;
+          if (body === 0) return (W / 2) * (waist + (1 - waist) * Math.pow(u, 2.2) * (0.5 + 0.5 * flare + 0.4 * flare * fz(z)));
+          return (W / 2) * Math.max(0.05, waist + (1 - waist) * Math.sin(Math.PI * u) * (0.6 + 0.4 * flare * fz(z)));
+        };
+        const inside = (p) => { const z = p[2], u = z / H, rot = twist * u, x = p[0] * Math.cos(rot) + p[1] * Math.sin(rot), y = -p[0] * Math.sin(rot) + p[1] * Math.cos(rot); return z >= -1e-6 && z <= H + 1e-6 && Math.max(Math.abs(x), Math.abs(y)) <= radius(z) + 1e-6; };
+        let cell = a, n = 0;
+        for (let it = 0; it < 4; it++) { n = Math.ceil(W / cell) ** 2 * Math.ceil(H / cell); if (n * UNIT[Math.min(3, v(1))].length * 0.35 < 14000) break; cell *= 1.25; }
+        const nu = Math.ceil(W / cell), nw = Math.ceil(H / cell), map = (u, vv, w) => [-W / 2 + (u / nu) * W, -W / 2 + (vv / nu) * W, (w / nw) * H];
+        const parts = latticeStruts(Math.min(3, v(1)), nu, nu, nw, map, inside, () => v(3));
+        const balls = [];
+        for (let k = 0; k < nw; k++) for (let j = 0; j < nu; j++) for (let i = 0; i < nu; i++) { const c = map(i + 0.5, j + 0.5, k + 0.5); if (inside(c)) balls.push([c, f(c[0], c[2])]); }
+        balls.sort((p, q) => q[1] - p[1]);
+        for (const [c] of balls.slice(0, Math.round(balls.length * v(7)))) parts.push({ a: c, b: c, r: (cell / 2) * v(8) * 0.95 });
+        let out = parts;
+        if (mount === "hanging") out = mapParts(parts, (q) => [q[0], q[1], -q[2]]);
+        if (mount === "wall") { const k = Math.min(1, (env.depth || 0.3) / (W / 2)); out = mapParts(parts.filter((p) => p.a[1] >= -1e-6 && p.b[1] >= -1e-6), (q) => [q[0], q[1] * k, q[2]]); }
+        if (mount === "standing") { out.push({ c: [0, 0, 0.01], u: [Math.max(0.25, radius(0) * 1.6), 0, 0], v: [0, Math.max(0.25, radius(0) * 1.6), 0], t: 0.02, structure: true }); out.label = "a weighted base plate"; }
+        else if (mount === "hanging") { out.push({ c: [0, 0, -0.01], u: [radius(0), 0, 0], v: [0, radius(0), 0], t: 0.02, structure: true }); out.label = "a ceiling plate"; }
+        else out.label = "a wall plate behind";
+        return out;
+      },
+      describe(g) { const v = (i) => paramValue("spatial", g, i); return `A ${["column flaring into a canopy", "cloud"][v(0)]} filled with a ${["cubic", "body-centred", "octet", "diamond"][v(1)]} lattice of ${Math.round(v(2) * 100)} cm cells, ${Math.round(v(7) * 100)}% felt pockets.`; },
+    },
+  };
+  // Module lattices (struts or a minimal surface) on cells warped by the field, conforming to a wavy surface.
+  function buildLattice(rule, g, ctx, surface) {
+    const v = (i) => paramValue(rule, g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(9));
+    const cLo = v(1), cHi = Math.max(v(1), v(2)), D = Math.min(ctx.env.depth || 0.3, v(5)), wave = v(6), infill = v(7), plug = v(8);
+    const col = (u) => { let s = 0; for (let k = 0; k < 8; k++) s += f(-W / 2 + u * W, ((k + 0.5) / 8) * Hm); return s / 8; };
+    const row = (w) => { let s = 0; for (let k = 0; k < 8; k++) s += f(-W / 2 + ((k + 0.5) / 8) * W, w * Hm); return s / 8; };
+    let grow = 1, xs, zs, nv;
+    for (let it = 0; it < 5; it++) {
+      xs = warp1D(W, (u) => lerp(cHi, cLo, col(u)) * grow); zs = warp1D(Hm, (w) => lerp(cHi, cLo, row(w)) * grow);
+      nv = Math.max(1, Math.round(D / ((cLo + cHi) / 2 / grow)));
+      const cells = (xs.length - 1) * (zs.length - 1) * nv;
+      if (surface ? cells < 2500 : cells * (v(0) === 4 ? 6 : UNIT[v(0)].length) * 0.4 < 12000) break;
+      grow *= 1.2;
+    }
+    const nu = xs.length - 1, nw = zs.length - 1, Dsurf = (x, z) => D * (1 - wave * (1 - f(x, z)));
+    const map = (u, vv, w) => { const x = atWarp(xs, u) - W / 2, z = atWarp(zs, w); return [x, (vv / nv) * Dsurf(x, z), z]; };
+    let parts;
+    if (!surface) parts = latticeStruts(v(0), nu, nv, nw, map, null, (p) => lerp(v(3), Math.max(v(3), v(4)), f(p[0], p[2])));
+    else {
+      const T = TPMS[v(0)], tLo = v(3), tHi = Math.max(v(3), v(4)), cell = (cLo + cHi) / 2 / grow, h = Math.max(cLo / grow / 4, Math.cbrt((W * Hm * D) / 7000));
+      const gx = Math.ceil(W / h), gy = Math.max(2, Math.ceil(D / h)), gz = Math.ceil(Hm / h);
+      const val = (x, y, z) => { const ds = Dsurf(x, z); return T.f(2 * Math.PI * invWarp(xs, x + W / 2), (2 * Math.PI * nv * y) / Math.max(ds, 1e-3), 2 * Math.PI * invWarp(zs, z)); };
+      const tris = isoTriangles(val, -W / 2, 0, 0, W / gx, D / gy, Hm / gz, gx, gy, gz, (tr) => { const c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); return c[1] <= Dsurf(c[0], c[2]) + 1e-6; });
+      parts = tris.map((tr) => { const c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); return { tri: tr, t: lerp(tLo, tHi, f(c[0], c[2])), structure: true }; });
+      void cell;
+    }
+    // felt balls in the cells (strut lattices) or in one labyrinth (minimal surfaces), strongest field first
+    const balls = [];
+    for (let k = 0; k < nw; k++) for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
+      const c = map(i + 0.5, j + 0.5, k + 0.5), sz = Math.min(xs[i + 1] - xs[i], zs[k + 1] - zs[k], Dsurf(c[0], c[2]) / nv);
+      if (surface && TPMS[v(0)].f(2 * Math.PI * (i + 0.5) + Math.PI / 2, 2 * Math.PI * (j + 0.5), 2 * Math.PI * (k + 0.5)) > 0 && v(0) === 1) continue;
+      balls.push([c, f(c[0], c[2]), sz]);
+    }
+    balls.sort((p, q) => q[1] - p[1]);
+    for (const [c, , sz] of balls.slice(0, Math.round(balls.length * infill))) parts.push({ a: c, b: c, r: (sz / 2) * plug * (surface ? 0.55 : 0.9) });
+    return mountPattern(parts, mount, { W, Hm, depth: D, mirror: false, feet: 2 + v(10), footLen: v(11) });
+  }
+  // Cellular automata (Andrasek's first example, Wolfram's "new kind of science"): a 3D grid of cells,
+  // each born or dying by how many of its neighbours are alive, generation after generation. Birth is
+  // likelier where the field is strong. Parts come out in birth order, so replaying them replays the growth.
+  LAB.cellular = {
+    group: "pattern", lab: true, direct: true, mounts: true, name: "Cellular automata", imitates: "coral and lichen growing by accretion, frost dendrites, sponges",
+    idea: "Each cell only looks at its 26 neighbours: with the right number alive it is born, with too many it dies. Run over many generations, these dumb local rules grow intricate porous bodies, densest where sound is strong.",
+    params: [opt("Rule", ["coral (accretes, never dies)", "sponge (born 1-4, dies when crowded)", "crystal (grows from faces only)"], CELL), num("Cell size", 0.03, 0.1, "cm", CELL),
+      num("Generations", 4, 40, "", CELL, true), num("Seeds", 1, 30, "", CELL, true), num("Birth chance", 0.05, 0.8, "%", RESP), num("Contrast", 0.5, 3, "", RESP),
+      num("Depth", 0.05, 0.3, "cm", CELL), opt("Made as", ["felt blocks", "printed bonds", "printed bonds with felt"], CELL), num("Block size", 0.4, 1, "%", CELL), ...holdParams],
+    build(g, down, ctx) {
+      const v = (i) => paramValue("cellular", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(5)), rand = rng(seedOf(g) + 5);
+      const rule = v(0), D = Math.min(ctx.env.depth || 0.3, v(6)), style = v(7);
+      let a = v(1);
+      while ((W / a) * (Hm / a) * (D / a) > 40000) a *= 1.15;
+      const nx = Math.max(2, Math.round(W / a)), ny = Math.max(2, Math.round(D / a)), nz = Math.max(2, Math.round(Hm / a)), N = nx * ny * nz;
+      const id = (i, j, k) => i + nx * (j + ny * k), born = new Int16Array(N).fill(-1), pos = (i, j, k) => [-W / 2 + (i + 0.5) * (W / nx), (j + 0.5) * (D / ny), (k + 0.5) * (Hm / nz)];
+      const fCell = new Float32Array(N);
+      for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const p = pos(i, j, k); fCell[id(i, j, k)] = f(p[0], p[2]); }
+      // seeds on the back layer at the strongest places of the field
+      const back = [];
+      for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) back.push([i, k, fCell[id(i, 0, k)] + rand() * 0.15]);
+      back.sort((p, q) => q[2] - p[2]);
+      for (const [i, k] of back.slice(0, v(3))) born[id(i, 0, k)] = 0;
+      const gens = v(2), chance = v(4);
+      for (let gen = 1; gen <= gens; gen++) {
+        const alive = Uint8Array.from(born, (b) => (b >= 0 ? 1 : 0)), next = [], dead = [];
+        for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+          let n26 = 0, n6 = 0;
+          for (let dk = -1; dk <= 1; dk++) for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+            if (!di && !dj && !dk) continue;
+            const ii = i + di, jj = j + dj, kk = k + dk;
+            if (ii < 0 || jj < 0 || kk < 0 || ii >= nx || jj >= ny || kk >= nz || !alive[id(ii, jj, kk)]) continue;
+            n26++; if (Math.abs(di) + Math.abs(dj) + Math.abs(dk) === 1) n6++;
+          }
+          const c = id(i, j, k);
+          if (alive[c]) { if (rule === 1 && n26 > 12) dead.push(c); continue; }
+          const ok = rule === 0 ? n26 >= 1 && n26 <= 2 : rule === 1 ? n26 >= 1 && n26 <= 4 : n6 === 1 && n26 <= 3;
+          if (ok && rand() < chance * (0.15 + 0.85 * fCell[c])) next.push(c);
+        }
+        for (const c of next) born[c] = gen;
+        for (const c of dead) born[c] = -2;
+      }
+      const cells = [];
+      for (let c = 0; c < N; c++) if (born[c] >= 0) cells.push(c);
+      cells.sort((p, q) => born[p] - born[q]);
+      const coord = (c) => [c % nx, Math.floor(c / nx) % ny, Math.floor(c / (nx * ny))], parts = [], cw = W / nx, cd = D / ny, ch = Hm / nz, bs = v(8);
+      for (const c of cells) {
+        const [i, j, k] = coord(c), p = pos(i, j, k);
+        if (style !== 1) parts.push({ c: p, u: [(cw / 2) * bs, 0, 0], v: [0, 0, (ch / 2) * bs], t: cd * bs });
+        if (style !== 0) for (const [di, dj, dk] of [[1, 0, 0], [0, 1, 0], [0, 0, 1]]) {
+          const ii = i + di, jj = j + dj, kk = k + dk;
+          if (ii < nx && jj < ny && kk < nz && born[id(ii, jj, kk)] >= 0) parts.push({ a: p, b: pos(ii, jj, kk), r: Math.min(cw, ch) * 0.06, structure: true });
+        }
+      }
+      if (!parts.length) parts.push({ c: pos(0, 0, 0), u: [cw / 2, 0, 0], v: [0, 0, ch / 2], t: cd });
+      return mountPattern(parts, mount, { W, Hm, depth: D, mirror: style === 0, feet: 2 + v(9), footLen: v(10) });
+    },
+    describe(g) { const v = (i) => paramValue("cellular", g, i); return `A ${["coral", "sponge", "crystal"][v(0)]} cellular automaton, ${Math.round(v(1) * 100)} cm cells grown over ${v(2)} generations from ${v(3)} seeds, made as ${["felt blocks", "printed bonds", "printed bonds with felt"][v(7)]}.`; },
+  };
+  // Liquid bioform: blobs that flow into one smooth body (an implicit surface of blended spheres),
+  // made as a thin shell of heat-formed felt and perforated where sound is strong, so sound gets inside.
+  LAB.bioform = {
+    group: "pattern", lab: true, direct: true, mounts: true, name: "Liquid bioform", imitates: "drops and splashes, cell clusters, seed pods, organic design's fluid bodies",
+    idea: "Blobs placed along a flowing path melt into one smooth body. It is made as a thin shell of heat-formed felt; where sound is strong the shell opens into holes, so sound reaches the felt inside as well as outside.",
+    params: [num("Blobs", 3, 24, "", CELL, true), num("Blob size", 0.12, 0.4, "cm", CELL), num("Flow (how far the path wanders)", 0, 1, "%", CELL), num("Melt (smoothness)", 0.3, 1, "%", CELL),
+      num("Holes", 0, 120, "", RESP, true), num("Hole size where sound is strong", 0.03, 0.15, "cm", RESP), num("Felt shell thickness", 0.003, 0.012, "mm", CELL), num("Contrast", 0.5, 3, "", RESP),
+      opt("Body", ["flowing blobs", "pulled from a slab"], CELL), ...holdParams],
+    build(g, down, ctx) {
+      if (paramValue("bioform", g, 8) === 1) return pulledBody(g, ctx);
+      const v = (i) => paramValue("bioform", g, i), mount = ctx.mount, env = ctx.env, W = env.width, H = mount === "standing" ? env.height - 0.05 : mount === "hanging" ? env.width : env.height;
+      const D = mount === "wall" ? env.depth : W, f = fieldFn(ctx.field, W, H, v(7)), rand = rng(seedOf(g) + 11), nb = v(0), R0 = v(1), flow = v(2), melt = v(3), t = v(6);
+      // a wandering path up the body, pulled sideways towards where the field is strong
+      const blobs = [];
+      let x = 0, y = 0;
+      for (let k = 0; k < nb; k++) {
+        const z = H * (0.12 + (0.76 * k) / Math.max(1, nb - 1));
+        let bx = x, bs = -1;
+        for (let s2 = 0; s2 < 5; s2++) { const cx = Math.max(-W / 3, Math.min(W / 3, x + (rand() - 0.5) * W * 0.5 * flow)), sc = f(cx, z) + rand() * 0.2; if (sc > bs) { bs = sc; bx = cx; } }
+        x = bx; y = Math.max(-D / 3, Math.min(D / 3, y + (rand() - 0.5) * D * 0.4 * flow));
+        blobs.push([x, mount === "wall" ? D * 0.35 : y, z, R0 * (0.6 + 0.6 * rand())]);
+      }
+      const k2 = 1 / (melt * melt), h0 = Math.max(0.03, Math.cbrt((W * (mount === "wall" ? env.depth : W) * H) / 22000));
+      for (const b of blobs) b[3] = Math.max(b[3], (2 * h0) / (0.83 * melt)); // never smaller than the mesh can see
+      const val = (px, py, pz) => { let s2 = 0; for (const [bx, by, bz, r] of blobs) s2 += Math.exp((-k2 * ((px - bx) ** 2 + (py - by) ** 2 + (pz - bz) ** 2)) / (r * r)); return 0.5 - s2; };
+      const y0 = mount === "wall" ? 0 : -D / 2, h = Math.max(0.03, Math.cbrt((W * D * H) / 22000)), gx = Math.ceil(W / h), gy = Math.max(2, Math.ceil(D / h)), gz = Math.ceil(H / h);
+      let tris = isoTriangles((a, b, c) => (mount === "wall" && b < 0.01 ? 1 : val(a, b, c)), -W / 2, y0, 0, W / gx, D / gy, H / gz, gx, gy, gz);
+      // holes: random points on the surface, open widest where the field is strong
+      const holes = [];
+      for (let k = 0; k < v(4) && tris.length; k++) { const tr = tris[Math.floor(rand() * tris.length)], c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); holes.push([c, v(5) * (0.25 + 0.75 * f(c[0], c[2]))]); }
+      if (holes.length) tris = tris.filter((tr) => { const c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); return holes.every(([q, r]) => Math.hypot(...sub(c, q)) > r); });
+      let parts = tris.map((tr) => ({ tri: tr, t }));
+      if (mount === "hanging") { parts = mapParts(parts, (q) => [q[0], q[1], q[2] - H]); parts.push({ a: [0, 0, 0], b: [0, 0, -H * 0.15], r: 0.004, structure: true }); parts.label = "a hanging cable"; return parts; }
+      if (mount === "wall") { parts.push({ c: [0, 0.004, H * 0.7], u: [W * 0.3, 0, 0], v: [0, 0, 0.04], t: 0.008, structure: true }); parts.label = "a wall cleat behind"; return parts; }
+      parts.push({ c: [0, 0, 0.01], u: [W * 0.3, 0, 0], v: [0, W * 0.3, 0], t: 0.02, structure: true }, { a: [0, 0, 0.02], b: [0, 0, H * 0.5], r: 0.012, structure: true });
+      parts.label = "a weighted base with a stem";
+      return parts;
+    },
+    describe(g) { const v = (i) => paramValue("bioform", g, i); if (v(8) === 1) return `A slab with ${v(0)} pulls stretched out of it (leaving liquid voids behind), a ${Math.round(v(6) * 1000)} mm heat-formed felt shell with ${v(4)} holes.`; return `${v(0)} blobs melted into one body, a ${Math.round(v(6) * 1000)} mm heat-formed felt shell with ${v(4)} holes up to ${Math.round(v(5) * 100)} cm.`; },
+  };
+  // Agent fibres: a swarm of agents crawls over the face, steered by a flow direction, by their
+  // neighbours (they line up, like a flock) and towards where sound is strong, weaving in depth.
+  // Their trails become cords; where sound is strong they sprout short hooked tufts.
+  LAB.swarm = {
+    group: "pattern", lab: true, direct: true, mounts: true, name: "Agent fibres", imitates: "mycelium, root mats, coir and sisal, a flock's paths, fibre printed by a robot",
+    idea: "Many simple agents crawl over the face, following a flow, lining up with their neighbours and drifting towards strong sound. Their trails become a mat of soft cords, with hooked tufts where sound is strongest. A mat of fibres is how felt absorbs, here at a larger scale.",
+    params: [num("Agents", 20, 300, "", CELL, true), num("Steps per agent", 20, 200, "", CELL, true), num("Flow angle", 0, 180, "°", CELL), num("Follow the flow", 0, 1, "%", CELL),
+      num("Line up with neighbours", 0, 1, "%", CELL), num("Drift towards sound", 0, 1, "%", RESP), num("Wander", 0, 1, "%", CELL), num("Weave depth", 0.02, 0.2, "cm", CELL),
+      num("Cord thickness", 0.002, 0.012, "mm", CELL), num("Tufts where sound is strong", 0, 1, "%", RESP), num("Tuft length", 0.02, 0.12, "cm", RESP), opt("Made as", ["soft cord (absorbs)", "printed"], CELL),
+      num("Contrast", 0.5, 3, "", RESP), ...holdParams],
+    build(g, down, ctx) {
+      const v = (i) => paramValue("swarm", g, i), mount = ctx.mount, { W, Hm } = frameOf(ctx.env, mount), f = fieldFn(ctx.field, W, Hm, v(12)), rand = rng(seedOf(g) + 31);
+      const D = Math.min(ctx.env.depth || 0.3, v(7)), r = v(8), printed = v(11) === 1, a0 = (v(2) * Math.PI) / 180, base = [Math.cos(a0), Math.sin(a0)];
+      let nA = v(0), steps = v(1);
+      while (nA * steps > 14000) { nA = Math.round(nA * 0.9); steps = Math.round(steps * 0.95); }
+      const stepLen = Math.max(0.012, Math.min(W, Hm) / 60), R = 0.08, parts = [], extra = printed ? { structure: true } : {};
+      const spawn = () => { const side = rand(); return side < 0.5 ? { x: -W / 2 + rand() * W, z: base[1] > 0 ? 0.001 : Hm - 0.001 } : { x: base[0] > 0 ? -W / 2 + 0.001 : W / 2 - 0.001, z: rand() * Hm }; };
+      const agents = Array.from({ length: nA }, () => ({ ...{ x: -W / 2 + rand() * W, z: rand() * Hm }, d: [...base], ph: rand() * 6.283, y: 0 }));
+      const order = [];
+      for (let s2 = 0; s2 < steps; s2++) {
+        const grid = new Map(), cellOf = (a) => Math.floor((a.x + W) / R) + "," + Math.floor(a.z / R);
+        for (const a of agents) { const k = cellOf(a); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(a); }
+        for (const a of agents) {
+          // line up with neighbours
+          let ax = 0, az = 0;
+          const cx = Math.floor((a.x + W) / R), cz = Math.floor(a.z / R);
+          for (let i = -1; i <= 1; i++) for (let k = -1; k <= 1; k++) for (const b of grid.get(cx + i + "," + (cz + k)) || []) if (b !== a) { ax += b.d[0]; az += b.d[1]; }
+          const al = Math.hypot(ax, az), e = 0.02, gx = (f(a.x + e, a.z) - f(a.x - e, a.z)) / (2 * e), gz = (f(a.x, a.z + e) - f(a.x, a.z - e)) / (2 * e), gl = Math.hypot(gx, gz) || 1;
+          const turn = (rand() - 0.5) * 2 * v(6) * 0.9;
+          let dx = a.d[0] + v(3) * 0.3 * (base[0] - a.d[0]) + (al ? v(4) * 0.5 * (ax / al - a.d[0]) : 0) + v(5) * 0.4 * (gx / gl);
+          let dz = a.d[1] + v(3) * 0.3 * (base[1] - a.d[1]) + (al ? v(4) * 0.5 * (az / al - a.d[1]) : 0) + v(5) * 0.4 * (gz / gl);
+          const c = Math.cos(turn), sn = Math.sin(turn);
+          [dx, dz] = [dx * c - dz * sn, dx * sn + dz * c];
+          const dl = Math.hypot(dx, dz) || 1;
+          a.d = [dx / dl, dz / dl];
+          const P = [a.x, D / 2 + (D / 2 - r) * Math.sin(a.ph), a.z];
+          a.x += a.d[0] * stepLen; a.z += a.d[1] * stepLen; a.ph += stepLen / 0.06;
+          if (a.x < -W / 2 || a.x > W / 2 || a.z < 0 || a.z > Hm) { Object.assign(a, spawn(), { d: [...base] }); continue; }
+          const Q = [a.x, D / 2 + (D / 2 - r) * Math.sin(a.ph), a.z], fq = f(a.x, a.z);
+          parts.push({ a: P, b: Q, r, ...extra });
+          if (rand() < v(9) * fq * 0.15) {
+            const L = v(10) * (0.5 + fq), hook = [a.d[0] * 0.5, 0, a.d[1] * 0.5], t1 = add(Q, [0, L * 0.7, 0]);
+            parts.push({ a: Q, b: [t1[0], Math.min(D + L, t1[1]), t1[2]], r: r * 0.8, ...extra }, { a: [t1[0], Math.min(D + L, t1[1]), t1[2]], b: add([t1[0], Math.min(D + L, t1[1]), t1[2]], mul(hook, L * 0.6)), r: r * 0.7, ...extra });
+          }
+        }
+      }
+      return mountPattern(parts, mount, { W, Hm, depth: D, mirror: false, feet: 2 + v(13), footLen: v(14) });
+    },
+    describe(g) { const v = (i) => paramValue("swarm", g, i); return `${v(0)} agents over ${v(1)} steps, flowing at ${Math.round(v(2))}°, ${Math.round(v(8) * 1000)} mm ${v(11) ? "printed fibres" : "soft cords"} woven ${Math.round(v(7) * 100)} cm deep${v(9) > 0.1 ? ", hooked tufts where sound is strong" : ""}.`; },
+  };
+  // "Pulled from a slab" (after Ross Lovegrove's Liquid Table Bioform, whose legs seem stretched out of the
+  // metal, leaving a liquid void in the top): a slab with pulls stretched out of it towards where the field
+  // is strong, and a dimple left above each pull. On a wall the pulls come out of the wall; under a ceiling
+  // they hang like stalactites; standing, the slab rests on its pulls.
+  function pulledBody(g, ctx) {
+    const v = (i) => paramValue("bioform", g, i), mount = ctx.mount, env = ctx.env, W = env.width, rand = rng(seedOf(g) + 23);
+    const span = mount === "wall" ? env.height : W, L = mount === "wall" ? env.depth : mount === "hanging" ? env.width * 0.8 : env.height - 0.05;
+    const f = fieldFn(ctx.field, W, span, v(7)), np = v(0), r0 = Math.max(0.03, v(1) * 0.35), melt = v(3), th = 0.04, t = v(6), flow = v(2);
+    // pulls at the strongest places of the field, kept apart; local frame: a across, b along the slab, n out of it
+    const cand = [];
+    for (let i = 0; i < 10; i++) for (let k = 0; k < 10; k++) { const a = -W / 2 + ((i + 0.5) / 10) * W, b = ((k + 0.5) / 10) * span; cand.push([a, b, f(a, b) + rand() * 0.25]); }
+    cand.sort((p, q) => q[2] - p[2]);
+    const pulls = [];
+    for (const c of cand) if (pulls.length < np && pulls.every((q) => Math.hypot(q[0] - c[0], q[1] - c[1]) > r0 * 2.2)) pulls.push([c[0], c[1], mount === "standing" ? L : L * (0.45 + 0.55 * (1 - flow * rand()))]);
+    const k2 = 1 / (melt * melt);
+    const seg = (a, b, n, P) => { const tt = Math.max(0, Math.min(1, n / P[2])), d2 = (a - P[0]) ** 2 + (b - P[1]) ** 2 + (n - tt * P[2]) ** 2, r = r0 * (1 - 0.55 * tt); return Math.exp((-k2 * d2) / (r * r)); };
+    const val = (a, b, n) => {
+      let s2 = Math.exp(-((n / th) ** 2) * 2);
+      for (const P of pulls) { s2 += seg(a, b, n, P); s2 -= 0.9 * Math.exp((-((a - P[0]) ** 2 + (b - P[1]) ** 2 + (n + th * 0.6) ** 2)) / (r0 * r0 * 0.5)); }
+      return 0.5 - s2;
+    };
+    const h = Math.max(0.025, Math.cbrt((W * span * (L + 0.1)) / 22000)), ga = Math.ceil(W / h), gb = Math.ceil(span / h), gn = Math.ceil((L + 0.12) / h);
+    let tris = isoTriangles(val, -W / 2, 0, -0.08, W / ga, span / gb, (L + 0.12) / gn, ga, gb, gn);
+    const holes = [];
+    for (let k = 0; k < v(4) && tris.length; k++) { const tr = tris[Math.floor(rand() * tris.length)], c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); holes.push([c, v(5) * (0.25 + 0.75 * f(c[0], c[1]))]); }
+    if (holes.length) tris = tris.filter((tr) => { const c = mul(add(add(tr[0], tr[1]), tr[2]), 1 / 3); return holes.every(([q, r]) => Math.hypot(...sub(c, q)) > r); });
+    const local = tris.map((tr) => ({ tri: tr, t }));
+    // local (a, b, n) to the room
+    let parts;
+    if (mount === "wall") { parts = mapParts(local, (q) => [q[0], Math.max(0, q[2]) + 0.01, q[1]]); parts.push({ c: [0, 0.004, span * 0.75], u: [W * 0.3, 0, 0], v: [0, 0, 0.04], t: 0.008, structure: true }); parts.label = "a wall cleat behind"; }
+    else if (mount === "hanging") { parts = mapParts(local, (q) => [q[0], q[1] - span / 2, -q[2] - 0.1]); for (const sx of [-1, 1]) parts.push({ a: [(sx * W) / 3, 0, 0], b: [(sx * W) / 3, 0, -0.1], r: 0.003, structure: true }); parts.label = "2 hanging cables"; }
+    else {
+      parts = mapParts(local, (q) => [q[0], q[1] - span / 2, Math.max(0, L - q[2])]);
+      for (const P of pulls) parts.push({ c: [P[0], P[1] - span / 2, 0.006], u: [r0, 0, 0], v: [0, r0, 0], t: 0.012, structure: true });
+      parts.label = `its ${pulls.length} pulls as legs, on weighted pads`;
+    }
+    return parts;
+  }
+  for (const [k, r] of Object.entries(LAB)) { r.genes = r.params.map((p) => p.label); RULES[k] = r; }
+
+  // Geometric fields to grow from when you want to draw by hand rather than by sound: an attractor
+  // point, a gradient, rings, the interference of two waves (Biothing's ceiling) or soft noise.
+  function patternField(spec, nx = 24, nz = 36) {
+    const data = new Float32Array(nx * nz), { kind = "waves", x = 0.5, z = 0.5, angle = 0, f1 = 3, f2 = 5, seed = 1 } = spec;
+    const a = (angle * Math.PI) / 180, rand = rng(seed * 977 + 3), knots = Array.from({ length: 49 }, () => rand());
+    const noise = (u, w) => { const U = u * 6, Wv = w * 6, i = Math.min(5, Math.floor(U)), k = Math.min(5, Math.floor(Wv)), fu = U - i, fw = Wv - k, q = (p, r) => knots[p + 7 * r], s = (t) => t * t * (3 - 2 * t);
+      return (q(i, k) * (1 - s(fu)) + q(i + 1, k) * s(fu)) * (1 - s(fw)) + (q(i, k + 1) * (1 - s(fu)) + q(i + 1, k + 1) * s(fu)) * s(fw); };
+    for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+      const u = i / (nx - 1), w = k / (nz - 1);
+      let val;
+      if (kind === "attractor") val = Math.exp(-((u - x) ** 2 + (w - z) ** 2) / (2 * (0.08 + 0.3 / f1) ** 2));
+      else if (kind === "gradient") val = (u - 0.5) * Math.cos(a) + (w - 0.5) * Math.sin(a);
+      else if (kind === "radial") val = 0.5 + 0.5 * Math.cos(2 * Math.PI * f1 * Math.hypot(u - x, w - z));
+      else if (kind === "noise") val = noise(u, w);
+      else val = Math.sin(2 * Math.PI * f1 * u) + Math.sin(2 * Math.PI * f2 * (u * Math.cos(a) + w * Math.sin(a)));
+      data[i + nx * k] = val;
+    }
+    return { data: normalise01(data), nx, nz };
+  }
+
+  // Quick facts for a live preview: felt mass, print mass and (standing) stability, no wave simulation.
+  function inspect(prims, softDensity, structureDensity, mount) {
+    const vox = voxelize(prims, 0.05), mass = vox.volume * softDensity;
+    let print = 0;
+    for (const p of prims) {
+      if (!p.structure) continue;
+      if (isTri(p)) print += 0.5 * Math.hypot(...cross(sub(p.tri[1], p.tri[0]), sub(p.tri[2], p.tri[0]))) * p.t;
+      else if (isSheet(p)) print += 4 * Math.hypot(...cross(p.u, p.v)) * p.t;
+      else print += Math.PI * p.r * p.r * Math.hypot(...sub(p.b, p.a));
+    }
+    return { mass, printMass: print * structureDensity, stance: mount === "standing" ? stability(prims, vox.com, mass, structureDensity) : null };
+  }
+
   // Every rule also gets four "stance" genes (used when the form stands on its own: root flare,
   // holdfast type, base size, number of roots) and a last gene choosing the soft material.
   const STANCE = 4;
@@ -1236,7 +1873,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
   function bounds(prims) {
     const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
     for (const p of prims) {
-      const pts = isSheet(p) ? corners(p) : [p.a, p.b], pad = isSheet(p) ? p.t / 2 : p.r;
+      const pts = isTri(p) ? p.tri : isSheet(p) ? corners(p) : [p.a, p.b], pad = isTri(p) || isSheet(p) ? p.t / 2 : p.r;
       for (const q of pts) for (let i = 0; i < 3; i++) { min[i] = Math.min(min[i], q[i] - pad); max[i] = Math.max(max[i], q[i] + pad); }
     }
     return { min, max };
@@ -1253,12 +1890,34 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
   }
 
   function envelope(size, mount) {
-    return { width: size, height: mount === "hanging" ? size : Math.min(2.2, size * 1.5), mount };
+    if (mount === "wall") return { width: size, height: size, depth: Math.min(0.35, Math.max(0.1, 0.3 * size)), mount };
+    return { width: size, height: mount === "hanging" ? size : Math.min(2.2, size * 1.5), depth: 0.3, mount };
+  }
+  // A form grown for the ceiling, turned to grow out of a wall and pressed into a relief no deeper than
+  // the envelope allows (like a tree trained flat against a wall).
+  function toWall(parts, env) {
+    const r = mapParts(parts, (q) => [q[0], -q[2], q[1]]), b = bounds(r.map((p) => (isSheet(p) ? { ...p, t: 0 } : p)));
+    const sf = Math.min(env.width / (b.max[0] - b.min[0] || 1e-9), env.height / (b.max[2] - b.min[2] || 1e-9)), sd = Math.min(sf, env.depth / (b.max[1] - b.min[1] || 1e-9));
+    const cx = (b.min[0] + b.max[0]) / 2, cz = (b.min[2] + b.max[2]) / 2, tr = (q) => [(q[0] - cx) * sf, (q[1] - b.min[1]) * sd + 0.02, (q[2] - cz) * sf + env.height / 2];
+    const out = r.map((p) => (isSheet(p) ? { ...p, c: tr(p.c), u: [p.u[0] * sf, p.u[1] * sd, p.u[2] * sf], v: [p.v[0] * sf, p.v[1] * sd, p.v[2] * sf] } : isTri(p) ? { ...p, tri: p.tri.map(tr) } : { ...p, a: tr(p.a), b: tr(p.b), r: p.r * sd }));
+    return wallCleat(out, env);
+  }
+  function wallCleat(out, env) {
+    out.push({ c: [0, 0.004, env.height * 0.75], u: [env.width * 0.4, 0, 0], v: [0, 0, 0.04], t: 0.008, structure: true });
+    out.label = "a wall cleat behind";
+    return out;
   }
 
   function grow(rule, genes, opts) {
-    const env = envelope(opts.size, opts.mount);
-    if (RULES[rule].direct) return RULES[rule].build(genes, opts.mount === "hanging", { env, field: opts.field, material: opts.material });
+    const env = envelope(opts.size, opts.mount), R = RULES[rule], ctx = { env, field: opts.field, material: opts.material, mount: opts.mount };
+    if (R.mounts) return R.build(genes, opts.mount === "hanging", ctx);
+    if (R.direct && opts.mount === "wall") {
+      // a sound-grown sheet stood just off the wall, its feet replaced by a cleat
+      const raw = R.build(genes, false, ctx), soft = raw.filter((p) => !p.structure), b = bounds(soft);
+      return wallCleat(mapParts(soft, (q) => [q[0], q[1] - b.min[1] + 0.02, q[2]]), env);
+    }
+    if (R.direct) return R.build(genes, opts.mount === "hanging", ctx);
+    if (opts.mount === "wall") return toWall(R.build(genes, true), env);
     const parts = fit(RULES[rule].build(genes, opts.mount === "hanging"), env);
     return opts.mount === "standing" ? standUp(parts, genes.slice(RULES[rule].genes.length, RULES[rule].genes.length + STANCE), env) : parts;
   }
@@ -1270,11 +1929,11 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     const flare = lerp(0, 0.6, st[0]), H = env.height;
     const k = (z) => 1 + flare * (1 - (2 * Math.max(0, Math.min(H, z))) / H);
     const fl = (q) => [q[0] * k(q[2]), q[1] * k(q[2]), q[2]];
-    let out = parts.map((p) => (isSheet(p) ? { ...p, c: fl(p.c) } : { ...p, a: fl(p.a), b: fl(p.b) }));
+    let out = parts.map((p) => (isTri(p) ? { ...p, tri: p.tri.map(fl) } : isSheet(p) ? { ...p, c: fl(p.c) } : { ...p, a: fl(p.a), b: fl(p.b) }));
     const b = bounds(out), wide = Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1]);
     if (wide > env.width) {
       const s = env.width / wide, sx = (q) => [q[0] * s, q[1] * s, q[2]];
-      out = out.map((p) => (isSheet(p) ? { ...p, c: sx(p.c), u: [p.u[0] * s, p.u[1] * s, p.u[2]], v: [p.v[0] * s, p.v[1] * s, p.v[2]] } : { ...p, a: sx(p.a), b: sx(p.b) }));
+      out = out.map((p) => (isTri(p) ? { ...p, tri: p.tri.map(sx) } : isSheet(p) ? { ...p, c: sx(p.c), u: [p.u[0] * s, p.u[1] * s, p.u[2]], v: [p.v[0] * s, p.v[1] * s, p.v[2]] } : { ...p, a: sx(p.a), b: sx(p.b) }));
     }
     const R = lerp(0.25, 0.5, st[2]) * env.width, roots = st[1] < 0.5, legs = 3 + Math.floor(st[3] * 3.999), top = 0.45 * H;
     if (roots) {
@@ -1309,7 +1968,11 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     for (const p of parts) {
       if (!p.structure) continue;
       let vol, c;
-      if (isSheet(p)) {
+      if (isTri(p)) {
+        const [A, B, C] = p.tri;
+        vol = 0.5 * Math.hypot(...cross(sub(B, A), sub(C, A))) * p.t; c = mul(add(add(A, B), C), 1 / 3);
+        for (const q of p.tri) if (q[2] < 0.03) ground.push([q[0], q[1]]);
+      } else if (isSheet(p)) {
         vol = 4 * Math.hypot(...cross(p.u, p.v)) * p.t; c = p.c;
         if (p.c[2] < 0.03) for (const q of corners(p)) ground.push([q[0], q[1]]);
       } else {
@@ -1334,17 +1997,18 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
   }
 
   // Compact transfer format (11 numbers per part) for workers and storage.
-  // Type code: 0 capsule, 1 sheet, +2 when the part is structure.
+  // Type code: 0 capsule, 1 sheet, +2 when the part is structure; 4 triangle, 5 structure triangle.
   const STRIDE = 11;
   function pack(prims) {
     const f = new Float32Array(prims.length * STRIDE);
-    prims.forEach((p, i) => f.set(isSheet(p) ? [p.structure ? 3 : 1, ...p.c, ...p.u, ...p.v, p.t] : [p.structure ? 2 : 0, ...p.a, ...p.b, p.r, 0, 0, 0], i * STRIDE));
+    prims.forEach((p, i) => f.set(isTri(p) ? [p.structure ? 5 : 4, ...p.tri[0], ...p.tri[1], ...p.tri[2], p.t] : isSheet(p) ? [p.structure ? 3 : 1, ...p.c, ...p.u, ...p.v, p.t] : [p.structure ? 2 : 0, ...p.a, ...p.b, p.r, 0, 0, 0], i * STRIDE));
     return f;
   }
   function unpack(f) {
     const out = [];
     for (let i = 0; i < f.length; i += STRIDE) {
       const x = Array.from(f.subarray(i + 1, i + STRIDE));
+      if (f[i] >= 4) { const tp = { tri: [x.slice(0, 3), x.slice(3, 6), x.slice(6, 9)], t: x[9] }; if (f[i] === 5) tp.structure = true; out.push(tp); continue; }
       const part = f[i] % 2 === 1 ? { c: x.slice(0, 3), u: x.slice(3, 6), v: x.slice(6, 9), t: x[9] } : { a: x.slice(0, 3), b: x.slice(3, 6), r: x[6] };
       if (f[i] >= 2) part.structure = true;
       out.push(part);
@@ -1361,12 +2025,18 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
   // Solid fraction per voxel (thin parts spread over neighbouring voxels so their volume is kept).
   function voxelize(all, dx) {
     const prims = all.filter((p) => !p.structure);
+    if (!prims.length) return { frac: new Float32Array(1), n: [1, 1, 1], o: [0, 0, 0], dx, volume: 0, com: [0, 0, 0] };
     const { min, max } = bounds(prims);
     const o = min.map((m) => m - dx), n = max.map((m, i) => Math.max(1, Math.ceil((m + dx - o[i]) / dx)));
     const frac = new Float32Array(n[0] * n[1] * n[2]), R = 0.75 * dx, NORM = 0.589;
     const range = (lo3, hi3) => [[0, 1, 2].map((i) => Math.max(0, Math.floor((lo3[i] - o[i]) / dx))), [0, 1, 2].map((i) => Math.min(n[i] - 1, Math.ceil((hi3[i] - o[i]) / dx)))];
     const soft = (x) => Math.max(0, Math.min(1, x / dx + 0.5));
     for (const p of prims) {
+      if (isTri(p)) {
+        const c = mul(add(add(p.tri[0], p.tri[1]), p.tri[2]), 1 / 3), i = Math.floor((c[0] - o[0]) / dx), j = Math.floor((c[1] - o[1]) / dx), k = Math.floor((c[2] - o[2]) / dx);
+        if (i >= 0 && j >= 0 && k >= 0 && i < n[0] && j < n[1] && k < n[2]) frac[i + n[0] * (j + n[1] * k)] += (0.5 * Math.hypot(...cross(sub(p.tri[1], p.tri[0]), sub(p.tri[2], p.tri[0]))) * p.t) / dx ** 3;
+        continue;
+      }
       if (isSheet(p)) {
         const b = bounds([p]), [lo, hi] = range(b.min.map((m) => m - dx), b.max.map((m) => m + dx));
         const Lu = Math.hypot(...p.u), Lv = Math.hypot(...p.v), uh = mul(p.u, 1 / (Lu || 1)), vh = mul(p.v, 1 / (Lv || 1)), nh = norm(cross(p.u, p.v));
@@ -1412,6 +2082,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
       const a = axis === 0 ? i : j;
       lo = Math.min(lo, a); hi = Math.max(hi, a);
     }
+    if (lo === Infinity) return { grid: new Float32Array(1), nh: 1, nz: 1, dx, extent: 0, x0: vox.o[h], z0: vox.o[2] };
     const layer = Math.round(lo + at * (hi - lo)), grid = new Float32Array(nh * nz);
     for (let k = 0; k < nz; k++) for (let b = 0; b < nh; b++) {
       const i = axis === 0 ? layer : b, j = axis === 0 ? b : layer;
@@ -1438,12 +2109,14 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
   // ------------------------------------------------------------------ FDTD -
   // 2D room section (width x height, rigid walls), the projected form placed at (cx, z), a
   // tone burst near a floor corner. Returns the energy decay rate and the absorption length.
-  function roomFor(mount) { return mount === "hanging" ? { w: 6, h: 4, cx: 3.4 } : { w: 6, h: 3.5, cx: 3.4 }; }
+  function roomFor(mount) { return mount === "hanging" ? { w: 6, h: 4, cx: 3.4 } : mount === "wall" ? { w: 6, h: 3.5, cx: 0 } : { w: 6, h: 3.5, cx: 3.4 }; }
 
   function makeSim(pr, sigma, freq, room, mount, opts = {}) {
     const dx = pr.dx, nx = Math.round(room.w / dx), nz = Math.round(room.h / dx), dt = (0.68 * dx) / C0;
     const p = new Float32Array(nx * nz), vx = new Float32Array((nx + 1) * nz), vz = new Float32Array(nx * (nz + 1)), s = new Float32Array(nx * nz);
-    const ox = Math.round((room.cx + pr.x0) / dx), oz = mount === "hanging" ? Math.round((room.h + pr.z0) / dx) : Math.round(pr.z0 / dx);
+    // on a wall the piece's back sits against the left wall of the section, its foot 1 m up
+    const ox = mount === "wall" ? Math.max(0, Math.round(pr.x0 / dx) + 1) : Math.round((room.cx + pr.x0) / dx);
+    const oz = mount === "hanging" ? Math.round((room.h + pr.z0) / dx) : mount === "wall" ? Math.round((1.0 + pr.z0) / dx) : Math.round(pr.z0 / dx);
     for (let k = 0; k < pr.nz; k++) for (let i = 0; i < pr.nh; i++) {
       const X = ox + i, Z = oz + k;
       if (X >= 0 && X < nx && Z >= 0 && Z < nz) s[X + nx * Z] = Math.max(s[X + nx * Z], pr.grid[i + pr.nh * k]);
@@ -1535,16 +2208,17 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     const vox = voxelize(prims, C0 / BANDS[BANDS.length - 1] / CELLS_PER_WAVE);
     const mass = vox.volume * material.density;
     // Strip method: absorption per metre in two slices per direction, times the extent.
-    const room = roomFor(mount), slices = [];
-    for (const axis of [0, 1]) for (const at of [0.3, 0.7]) slices.push({ axis, sl: slice(vox, axis, at) });
-    const area = BANDS.map((f, bi) => {
+    // On a wall only slices across the wall make sense (the depth profile against the wall).
+    const room = roomFor(mount), slices = [], axes = mount === "wall" ? [0] : [0, 1];
+    for (const axis of axes) for (const at of [0.3, 0.7]) slices.push({ axis, sl: slice(vox, axis, at) });
+    const area = vox.volume === 0 ? BANDS.map(() => 0) : BANDS.map((f, bi) => {
       const factor = 2 ** (BANDS.length - 1 - bi);
-      const perAxis = [0, 1].map((axis) => {
+      const perAxis = axes.map((axis) => {
         const mine = slices.filter((x) => x.axis === axis);
         const mean = mine.reduce((acc, { sl }) => acc + absorptionLength(downsample(sl, factor), material.sigma, f, room, mount).length, 0) / mine.length;
         return mean * mine[0].sl.extent;
       });
-      return (perAxis[0] + perAxis[1]) / 2;
+      return perAxis.reduce((a, x) => a + x, 0) / perAxis.length;
     });
     const w = weights || [1 / 3, 1 / 3, 1 / 3];
     const score = area.reduce((a, x, i) => a + x * w[i], 0);
@@ -1552,8 +2226,10 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     let fitness = score - (over ? score * (mass / budget - 1) + 0.05 : 0);
     const stance = mount === "standing" ? stability(prims, vox.com, mass, structureDensity) : null;
     if (stance && !stance.ok) fitness -= score * 0.8 * Math.min(1, (MIN_TIP_ANGLE - stance.angle) / MIN_TIP_ANGLE) + 0.05;
+    const printMass = inspect(prims, 0, structureDensity, "wall").printMass;
+    if (RULES[rule].group === "lattice" && printMass > 3 * budget) fitness -= score * (printMass / (3 * budget) - 1);
     return { rule, genes, mount, size, prims, mass, volume: vox.volume, area, score, fitness, perKg: score / Math.max(mass, 1e-6), stance,
-      holdfast: prims.label || null, fieldMap: prims.field || null, cutPlan: prims.cutPlan || null, skinCount: prims.skinCount || 0 };
+      holdfast: prims.label || null, fieldMap: prims.field || null, cutPlan: prims.cutPlan || null, stripPlan: prims.stripPlan || null, skinCount: prims.skinCount || 0, printMass };
   }
 
   // A flat 50 mm panel of the same material and mass on a wall, through the same solver,
@@ -1625,11 +2301,12 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     for (const v of data) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
     return data.map((v) => (hi > lo ? (v - lo) / (hi - lo) : 0.5));
   };
-  function fieldFromModes({ L, W, H, x0, y0, width, height, nx = 24, nz = 36, fmin = 70, fmax = 200, maxModes = 60, zBase = 0 }) {
+  // ceilingZ: sample a horizontal plane at that height instead (a piece hanging under the ceiling).
+  function fieldFromModes({ L, W, H, x0, y0, width, height, nx = 24, nz = 36, fmin = 70, fmax = 200, maxModes = 60, zBase = 0, ceilingZ = null }) {
     const use = roomModes(L, W, H, fmin, fmax, maxModes), data = new Float32Array(nx * nz);
     for (const { n } of use) for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
-      const x = x0 - width / 2 + (i / (nx - 1)) * width, z = zBase + (k / (nz - 1)) * height;
-      data[i + nx * k] += modeVelocity2(n, L, W, H, x, y0, z);
+      const x = x0 - width / 2 + (i / (nx - 1)) * width, v = k / (nz - 1);
+      data[i + nx * k] += ceilingZ === null ? modeVelocity2(n, L, W, H, x, y0, zBase + v * height) : modeVelocity2(n, L, W, H, x, Math.max(0, Math.min(W, y0 - height / 2 + v * height)), ceilingZ);
     }
     return { data: normalise01(data), nx, nz, width, height, modes: use.map((m) => ({ n: m.n, f: m.f })) };
   }
@@ -1691,7 +2368,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     const tuft = (q, nrm) => { if (out.length < MAX) out.push({ a: q, b: add(q, mul(nrm, len)), r }); };
     const tries = (area) => { const x = area * density; return Math.floor(x) + (rand() < x - Math.floor(x) ? 1 : 0); };
     for (const p of parts) {
-      if (p.structure) continue;
+      if (p.structure || isTri(p)) continue;
       if (isSheet(p)) {
         const nh = norm(cross(p.u, p.v)), area = 8 * Math.hypot(...cross(p.u, p.v));
         for (let k = tries(area); k > 0; k--) {
@@ -1734,7 +2411,7 @@ dl.facts dd { margin: 0; font-family: var(--mono); }
     return next;
   }
 
-  const Growth = { placementMap, sampleLayout, growSkin, SKIN_GENES, roomModes, sampleField, RULES, BANDS, STRIDE, STANCE, MIN_TIP_ANGLE, stability, hull, fieldFromSound, fieldFromModes, solverStep, pack, unpack, count, isSheet, geneCount, grow, voxelize, project, slice, downsample, makeSim, absorptionLength, roomFor, evaluate, panelBaseline, nextGeneration, rng, bounds, envelope };
+  const Growth = { paramValue, patternField, inspect, mapParts, isTri, placementMap, sampleLayout, growSkin, SKIN_GENES, roomModes, sampleField, RULES, BANDS, STRIDE, STANCE, MIN_TIP_ANGLE, stability, hull, fieldFromSound, fieldFromModes, solverStep, pack, unpack, count, isSheet, geneCount, grow, voxelize, project, slice, downsample, makeSim, absorptionLength, roomFor, evaluate, panelBaseline, nextGeneration, rng, bounds, envelope };
   if (typeof module !== "undefined" && module.exports) module.exports = Growth;
   else root.Growth = Growth;
 })(typeof self !== "undefined" ? self : this);
@@ -1767,7 +2444,7 @@ const state = {
   results: null, preview: {}, seed: 1, growing: false, progress: 0, ranking: null,
   flatThick: 50, matView: "chart", view: "3d",
   spaces: [], spaceId: null, yUp: false, showAbs: true, nextId: 1,
-  matPick: "auto", famEl: 0.12, fMount: "standing", fRule: "all", fSize: 1.2, fBudget: 4, forms: [], formSel: null, fGrowing: false, fProgress: 0, fNext: 1, fSeed: 1, fLive: null, fBand: 500,
+  matPick: "auto", famEl: 0.12, allMounts: false, fMount: "standing", fRule: "all", fSize: 1.2, fBudget: 4, forms: [], formSel: null, fGrowing: false, fProgress: 0, fNext: 1, fSeed: 1, fLive: null, fBand: 500,
 };
 // Soft materials evolution may use: all ticked ones, or the one picked in the options bar.
 const allowedSoft = () => (state.matPick === "auto" ? [...state.porous] : [state.matPick]);
@@ -1794,6 +2471,7 @@ function updateRoomTarget() {
 }
 function setTool(k) {
   state.gtool = k; state.fRule = k;
+  if (selForm() && selForm().rule !== k) state.formSel = null;
   renderOptbar(); renderTools(); renderCanvas(); renderDock(); renderStatus(); renderGuideTip();
 }
 const current = (key) => (state.results && state.results.find((r) => r.family === key)) || state.preview[key];
@@ -1883,6 +2561,7 @@ function renderTools() {
     ["all", "All natural growth rules"], ...NATURAL.map((k) => [k, `${G.RULES[k].name}: imitates ${G.RULES[k].imitates}`]), "sep",
     ["allsheets", "All sheet hybrids (felt sheets arranged by nature)"], ...HYBRID.map((k) => [k, `${G.RULES[k].name} (sheets): imitates ${G.RULES[k].imitates}`]), "sep",
     ["membrane", "Sound-grown membrane (after Biothing's Genware)"], ["cutsheet", "Interference cut-sheet (after Biothing's laser-cut ceiling)"], "sep",
+    ...PATTERNS.map((k) => [k, `${G.RULES[k].name} (graph): imitates ${G.RULES[k].imitates}`]), "sep",
     ["orbit", "Room view: orbit (drag in the view)"], ["top", "Room view: from above"], ["home", "Room view: reset"], ["eye", "Show or hide structures in the room"]];
   else items = [["orbit", "Orbit view (drag in the viewport)"], ["top", "Top view"], ["home", "Reset view"], "sep", ["eye", "Show or hide absorbers"]];
   $("#tools").innerHTML = items.map((it) => it === "sep" ? '<span class="tool-sep" aria-hidden="true"></span>' : (() => {
@@ -2398,7 +3077,7 @@ function absorbersPanel() {
   const sugg = [best && best.family, cloud && "cloud", bestForm && "form:" + bestForm.id].filter(Boolean)
     .map((key) => ({ key, need: R.areaNeeded(space, effAlpha(sp, { family: key }), abs) }));
   const options = (sel) => families().map((f) => `<option value="${f.key}" ${f.key === sel ? "selected" : ""}>${f.name}${grown(f.key) ? "" : " (seed)"}</option>`).join("")
-    + (state.forms.length ? `<optgroup label="Grown forms">${state.forms.map((f) => `<option value="form:${f.id}" ${"form:" + f.id === sel ? "selected" : ""}>${esc(f.name)} (${f.mount})</option>`).join("")}</optgroup>` : "");
+    + (state.forms.length ? `<optgroup label="Grown forms">${state.forms.map((f) => `<option value="form:${f.id}" ${"form:" + f.id === sel ? "selected" : ""}>${esc(f.name)} (${MOUNT_NAME[f.mount].toLowerCase()})</option>`).join("")}</optgroup>` : "");
   const unit = (key) => (isForm(key) ? "pieces" : "m²");
   return `<details class="panel" open id="panel-absorbers"><summary>Placed in this room</summary><div class="panel-body">
     ${sp.placements.map((pl, i) => `<div class="placement"><select data-pl-fam="${i}" aria-label="Shape or form">${options(pl.family)}</select>
@@ -2519,19 +3198,20 @@ const View3D = (() => {
     if (!state.showAbs) return;
     const { min, max } = sp.info, W = max[0] - min[0], D = max[1] - min[1], H = max[2] - min[2], panel = 1.2;
     const lay = roomLayout(sp);
-    let li = 0;
+    let li = 0, wi = 0;
     for (const pl of sp.placements) {
       if (isForm(pl.family)) {
         const f = formOf(pl.family);
         if (!f || pl.area <= 0) continue;
         const n = Math.max(1, Math.min(Math.round(pl.area), Math.floor(60000 / Math.max(1, G.count(f.prims))))), step = f.size * 1.4;
+        if (f.mount === "wall") { const sp2 = wallSpots(sp, f.size, n, wi); wi += sp2.length; formInstances(f, sp2, v.root); continue; }
         const cols = Math.max(1, Math.floor((W - step) / step) + 1), spots = [];
         for (let k = 0; k < n; k++) {
-          const zs = f.mount === "hanging" ? max[2] - 0.3 : min[2];
+          const zs = f.mount === "hanging" ? max[2] : min[2];
           if (lay && li < lay.spots.length) { const [sx, sy] = lay.spots[li++]; spots.push([min[0] + sx, min[1] + sy, zs]); continue; }
           const i = k % cols, j = Math.floor(k / cols);
           const x = min[0] + (W - (cols - 1) * step) / 2 + i * step, y = min[1] + step / 2 + 0.5 + j * step;
-          spots.push([x, Math.min(y, max[1] - step / 2), f.mount === "hanging" ? max[2] - 0.3 : min[2]]);
+          spots.push([x, Math.min(y, max[1] - step / 2), zs]);
         }
         formInstances(f, spots, v.root);
         continue;
@@ -2750,6 +3430,7 @@ const G = window.Growth;
 const RULE_KEYS = Object.keys(G.RULES);
 const NATURAL = RULE_KEYS.filter((k) => !G.RULES[k].group), HYBRID = RULE_KEYS.filter((k) => G.RULES[k].group === "hybrid");
 const SOUND = RULE_KEYS.filter((k) => G.RULES[k].group === "sound"), isSound = (k) => SOUND.includes(k);
+const PATTERNS = RULE_KEYS.filter((k) => G.RULES[k].lab);
 const rulesFor = (pick) => (pick === "all" ? NATURAL : pick === "allsheets" ? HYBRID
   : pick === "allsurf" ? E.FAMILIES.filter((f) => state.fMount === "hanging" || f.key !== "cloud").map((f) => f.key) : [pick]);
 Object.assign(ICONS, {
@@ -2763,6 +3444,14 @@ Object.assign(ICONS, {
   gills: '<path d="M2 6 H18 M4 6 V14 M7 6 V16 M10 6 V17 M13 6 V16 M16 6 V14"/>',
   cone: '<path d="M10 2 C14 6 15 12 10 18 C5 12 6 6 10 2 Z M7 7 L13 9 M6 11 L14 13 M7 15 L13 16"/>',
   lamellae: '<path d="M4 4 L16 2 M3 9 L17 9 M4 14 L16 16 M6 18 L14 19"/>',
+  voronoi: '<path d="M2 7 L7 4 L11 8 L8 13 L3 12 Z M11 8 L17 5 M8 13 L11 18 M11 8 L16 12 L14 17 L11 18"/>',
+  petals: '<path d="M10 10 C7 5 9 2 10 2 C11 2 13 5 10 10 C15 7 18 9 18 10 C18 11 15 13 10 10 C13 15 11 18 10 18 C9 18 7 15 10 10 C5 13 2 11 2 10 C2 9 5 7 10 10"/>',
+  strips: '<path d="M3 5 H17 M3 10 H17 M3 15 H17 M6 2 V18 M10 2 V18 M14 2 V18"/>',
+  strutlattice: '<path d="M3 3 L10 7 L17 3 M3 3 V11 L10 15 L17 11 V3 M10 7 V15 M3 11 L10 7 L17 11"/>',
+  tpms: '<path d="M2 10 C5 4 8 4 10 10 S15 16 18 10 M2 10 C5 16 8 16 10 10 S15 4 18 10"/>',
+  spatial: '<path d="M8 18 H12 M9 18 L7 9 L3 3 M11 18 L13 9 L17 3 M7 9 L13 9 M5 6 L15 6 M3 3 H17"/>',
+  cellular: '<rect x="3" y="3" width="4" height="4"/><rect x="8" y="8" width="4" height="4"/><rect x="13" y="3" width="4" height="4"/><rect x="8" y="13" width="4" height="4"/><rect x="3" y="13" width="4" height="4"/>',
+  bioform: '<path d="M10 2 C15 2 16 7 13 9 C17 11 15 18 10 18 C5 18 4 12 7 10 C4 7 6 2 10 2 Z"/>',
 });
 const isForm = (key) => typeof key === "string" && key.startsWith("form:");
 const formOf = (key) => state.forms.find((f) => "form:" + f.id === key);
@@ -2837,26 +3526,39 @@ self.onmessage = (e) => {
   return { run(kind, job) { init(); return new Promise((resolve, reject) => { queue.push({ id: next++, kind, job, resolve, reject }); pump(); }); } };
 })();
 
+// Mounts: every generator grows for a wall, the ceiling or the floor (or all three in one run).
+const MOUNTS = ["wall", "hanging", "standing"], MOUNT_NAME = { standing: "Freestanding", wall: "On a wall", hanging: "From the ceiling" };
+const mountsToGrow = () => (state.allMounts ? MOUNTS.slice() : [state.fMount]);
+const isLab = (k) => !!(G.RULES[k] && G.RULES[k].lab), usesField = (k) => isSound(k) || isLab(k);
+const seedKey = (rule, mount) => rule + "@" + mount;
+const printKey = (rule) => (G.RULES[rule] && G.RULES[rule].group === "lattice" ? state.lab.print : structureKey());
+state.evo = { pop: 14, gens: 9, mutation: 0.18, seed: 1, fixed: false, useSeeds: true };
+state.lab = { genes: {}, ranges: {}, locks: {}, print: "pla_print", showRanges: false, tested: null, preview: null, grow: 1 };
+const labGenes = (rule) => { const n = G.geneCount(rule), g = state.lab.genes[rule]; return g && g.length === n ? g : (state.lab.genes[rule] = Array.from({ length: n }, () => 0.5)); };
+const labRanges = (rule) => { const n = G.geneCount(rule), g = state.lab.ranges[rule]; return g && g.length === n ? g : (state.lab.ranges[rule] = Array.from({ length: n }, () => [0, 1])); };
+const labLocks = (rule) => { const n = G.geneCount(rule), g = state.lab.locks[rule]; return g && g.length === n ? g : (state.lab.locks[rule] = Array.from({ length: n }, () => false)); };
+// The soft material a genome asks for: the one picked in the options bar, or the material gene's choice.
+function materialOf(rule, genes) {
+  const mats = allowedSoft(), ms = rule === "cutsheet" && mats.some((k) => E.FELTS[k].formable) ? mats.filter((k) => E.FELTS[k].formable) : mats;
+  return ms[Math.min(ms.length - 1, Math.floor(genes[genes.length - 1] * ms.length))];
+}
+
 async function growForms() {
   if (state.fGrowing) return;
   if (!allowedSoft().length) { addMsg("note", "Pick at least one soft material in the Materials workspace first."); return; }
   state.fGrowing = true; state.fProgress = 0;
   renderOptbar(); renderStatus();
-  const rules = rulesFor(state.fRule);
-  const P = rules.length > 1 ? 10 : 14, GENS = rules.length > 1 ? 5 : 9, total = rules.length * (GENS + 1);
-  const mats = allowedSoft(), weights = formBandWeights(), sKey = structureKey(), rand = G.rng(97 + state.fSeed++ * 7919), made = [];
-  let steps = 0, field = null;
-  if (rules.some(isSound)) {
-    field = await computeField();
-    if (!field) { state.fGrowing = false; renderOptbar(); renderStatus(); return; }
-  }
-  const job = field && { data: field.data, nx: field.nx, nz: field.nz, rhythm: field.rhythm || null };
+  const rules = rulesFor(state.fRule), mounts = mountsToGrow(), single = rules.length === 1 && !isSurf(rules[0]);
+  const P = single ? state.evo.pop : 10, GENS = single ? state.evo.gens : 5, total = rules.length * mounts.length * (GENS + 1);
+  const weights = formBandWeights(), made = [], seedNo = state.evo.fixed ? state.evo.seed : state.evo.seed + state.fSeed++;
+  const rand = G.rng(97 + seedNo * 7919);
+  let steps = 0;
   try {
-    for (const rule of rules) {
+    for (const mount of mounts) for (const rule of rules) {
       if (isSurf(rule)) {
-        if (rule === "cloud" && state.fMount === "standing") { addMsg("note", "The hanging cloud only hangs: switch to Hanging to grow it."); steps += GENS + 1; continue; }
+        if (rule === "cloud" && mount !== "hanging") { if (!state.allMounts) addMsg("note", "The hanging cloud only hangs: switch to Ceiling to grow it."); steps += GENS + 1; continue; }
         const base = steps;
-        const piece = await growSurface(rule, sKey, (live, prog) => {
+        const piece = await growSurface(rule, structureKey(), mount, (live, prog) => {
           state.fLive = live; state.fProgress = (base + prog * (GENS + 1)) / total;
           if (gmode() === "forms") { renderFormsCanvas(); renderStatus(); }
         });
@@ -2864,23 +3566,35 @@ async function growForms() {
         made.push(addForm(piece));
         continue;
       }
-      const n = G.geneCount(rule);
-      // Genware's library of seeds: kept genomes (and slight variations) start the population.
-      const seeds = (state.seeds[rule] || []).filter((g) => g.length === n), nSeed = Math.min(seeds.length * 2, Math.floor(P / 2));
-      let pop = Array.from({ length: P }, (_, i) => (i < nSeed ? seeds[i % seeds.length].map((x) => (i < seeds.length ? x : Math.min(1, Math.max(0, x + (rand() - 0.5) * 0.2)))) : Array.from({ length: n }, rand))), best = null;
+      let field = null;
+      if (usesField(rule)) {
+        field = await computeField(mount);
+        if (!field) throw new Error("the field could not be computed");
+      }
+      const job = field && { data: field.data, nx: field.nx, nz: field.nz, rhythm: field.rhythm || null };
+      const sKey = printKey(rule), n = G.geneCount(rule);
+      // In the graph the designer locks values and gives evolution a range for the rest.
+      const cur = single ? labGenes(rule) : null, lock = single ? labLocks(rule) : null, rg = single ? labRanges(rule) : null;
+      const within = (g) => (single ? g.map((x, i) => (lock[i] ? cur[i] : Math.min(rg[i][1], Math.max(rg[i][0], x)))) : g);
+      const randomGenes = () => within(Array.from({ length: n }, (_, i) => (single ? rg[i][0] + rand() * (rg[i][1] - rg[i][0]) : rand())));
+      // Genware's library of seeds: kept genomes for this mount (and slight variations) start the population.
+      const lib = state.evo.useSeeds ? (state.seeds[seedKey(rule, mount)] || []).filter((g) => g.length === n) : [], nSeed = Math.min(lib.length * 2, Math.floor(P / 2));
+      let pop = [];
+      if (single) pop.push(cur.slice());
+      for (let i = 0; i < nSeed && pop.length < P; i++) pop.push(within(lib[i % lib.length].map((x) => (i < lib.length ? x : Math.min(1, Math.max(0, x + (rand() - 0.5) * 0.2))))));
+      while (pop.length < P) pop.push(randomGenes());
+      let best = null;
       for (let gen = 0; gen <= GENS; gen++) {
-        // A cut-sheet must be a self-supporting sheet: only felts that can be cut and shaped.
-        const ms = rule === "cutsheet" && mats.some((k) => E.FELTS[k].formable) ? mats.filter((k) => E.FELTS[k].formable) : mats;
         const res = await Promise.all(pop.map((genes) => {
-          const material = ms[Math.min(ms.length - 1, Math.floor(genes[n - 1] * ms.length))], m = E.FELTS[material];
-          return Pool.run("evaluate", { rule, genes, mount: state.fMount, size: state.fSize, material: { sigma: m.sigma, density: m.density }, budget: state.fBudget, weights,
-            structureDensity: E.RIGIDS[sKey].density, field: isSound(rule) ? job : null })
-            .then((r) => ({ ...r, material, structureMat: sKey, ...(isSound(rule) ? { srcField: job, sourceLabel: field.label } : {}) }));
+          const material = materialOf(rule, genes), m = E.FELTS[material];
+          return Pool.run("evaluate", { rule, genes, mount, size: state.fSize, material: { sigma: m.sigma, density: m.density }, budget: state.fBudget, weights,
+            structureDensity: E.RIGIDS[sKey].density, field: job })
+            .then((r) => ({ ...r, material, structureMat: sKey, ...(job ? { srcField: job, sourceLabel: field.label } : {}) }));
         }));
         for (const r of res) if (!best || r.fitness > best.fitness) best = r;
         state.fLive = best; state.fProgress = ++steps / total;
         if (gmode() === "forms") { renderFormsCanvas(); renderStatus(); }
-        if (gen < GENS) pop = G.nextGeneration(pop, res.map((r) => r.fitness), rand);
+        if (gen < GENS) pop = G.nextGeneration(pop, res.map((r) => r.fitness), rand, { elite: 2, mutation: state.evo.mutation }).map(within);
       }
       made.push(addForm(best));
     }
@@ -2890,9 +3604,10 @@ async function growForms() {
     state.fGrowing = false; state.fLive = null;
   }
   if (made.length) {
-    const top = made.sort((a, b) => b.fitness - a.fitness)[0];
+    const top = made.slice().sort((a, b) => b.fitness - a.fitness)[0];
     state.formSel = top.id;
-    addMsg("note", `Grown. ${made.length > 1 ? `Best rule: ${top.name}` : top.name}: ${fix(top.score, 2)} m² of absorption per piece. Watch the sound under the 3D view.`);
+    addMsg("note", mounts.length > 1 ? `Grown for the wall, the ceiling and the floor: ${made.map((f) => `${f.name} (${MOUNT_NAME[f.mount].toLowerCase()}) ${fix(f.score, 2)} m²`).join(", ")}.`
+      : `Grown. ${made.length > 1 ? `Best rule: ${top.name}` : top.name}: ${fix(top.score, 2)} m² of absorption per piece. Watch the sound under the 3D view.`);
   }
   renderAll();
 }
@@ -2928,18 +3643,23 @@ function bindRoomSelect() {
   };
   $("#import-file").onchange = (e) => importOBJ(e.target.files[0]);
 }
+function setMount(k) {
+  if (k === "all") state.allMounts = !state.allMounts; else { state.allMounts = false; state.fMount = k; }
+  state.gw.field = null;
+  renderOptbar(); renderCanvas(); renderDock(); renderStatus();
+}
 function renderFormsBar(ob) {
   ob.classList.add("studio");
-  ob.innerHTML = `${roomSelect()}<span class="divider"></span>${targetSelect()}<span class="divider"></span><div class="opt" id="opt-mount"><div class="segd" role="group" aria-label="How the piece is installed">
-      <button data-mount="standing" aria-pressed="${state.fMount === "standing"}">Freestanding</button><button data-mount="hanging" aria-pressed="${state.fMount === "hanging"}">Hanging</button></div></div>
+  ob.innerHTML = `${roomSelect()}<span class="divider"></span>${targetSelect()}<span class="divider"></span><div class="opt" id="opt-mount"><div class="segd" role="group" aria-label="Where the piece goes">
+      ${[["standing", "Floor"], ["wall", "Wall"], ["hanging", "Ceiling"]].map(([k, l]) => `<button data-mount="${k}" aria-pressed="${!state.allMounts && state.fMount === k}" title="${MOUNT_NAME[k]}">${l}</button>`).join("")}<button data-mount="all" aria-pressed="${state.allMounts}" title="Grow a seed for the wall, the ceiling and the floor in one run">All 3</button></div></div>
     <span class="divider"></span>
     ${materialPicker("f-mat-pick")}
     <span class="divider"></span>
     <div class="opt" id="opt-form-size"><label for="f-size">Size</label><input type="range" id="f-size" min="0.4" max="2" step="0.1" value="${state.fSize}"><output id="f-size-out">${fix(state.fSize, 1)} m</output>
       <label for="f-budget" title="How much soft material one piece may use">Per piece</label><input type="range" id="f-budget" min="0.5" max="15" step="0.5" value="${state.fBudget}"><output id="f-budget-out">${state.fBudget} kg</output></div>
     <span class="spacer"></span>
-    <button class="btn primary" id="btn-grow-forms" ${state.fGrowing ? "disabled" : ""}>${state.fGrowing ? "Growing…" : state.fRule === "all" ? "Grow natural forms" : state.fRule === "allsheets" ? "Grow sheet hybrids" : state.fRule === "allsurf" ? "Grow surface textures" : state.fRule === "membrane" ? "Grow membrane" : state.fRule === "cutsheet" ? "Grow cut-sheet" : "Grow " + info(state.fRule).name.toLowerCase()}</button>`;
-  $$("[data-mount]").forEach((b) => b.onclick = () => { state.fMount = b.dataset.mount; renderFormsBar(ob); renderFormsCanvas(); renderStatus(); });
+    <button class="btn primary" id="btn-grow-forms" ${state.fGrowing ? "disabled" : ""}>${state.fGrowing ? "Growing…" : state.allMounts ? "Grow for all 3" : state.fRule === "all" ? "Grow natural forms" : state.fRule === "allsheets" ? "Grow sheet hybrids" : state.fRule === "allsurf" ? "Grow surface textures" : state.fRule === "membrane" ? "Grow membrane" : state.fRule === "cutsheet" ? "Grow cut-sheet" : "Grow " + info(state.fRule).name.toLowerCase()}</button>`;
+  $$("#opt-mount [data-mount]").forEach((b) => b.onclick = () => setMount(b.dataset.mount));
   $("#f-mat-pick").onchange = (e) => { state.matPick = e.target.value; briefChanged(); renderStatus(); renderDock(); };
   bindTarget(); bindRoomSelect();
   $("#f-size").oninput = (e) => { state.fSize = Number(e.target.value); $("#f-size-out").textContent = fix(state.fSize, 1) + " m"; };
@@ -2962,7 +3682,7 @@ function formBars(f) {
 }
 
 function renderFormsCanvas() {
-  if (!state.fLive && isSound(state.fRule) && !selMembrane()) { gwIntro(); return; }
+  if (!state.fLive && !selForm() && G.RULES[state.fRule]) { labView(state.fRule); return; }
   const c = $("#struct-zone") || $("#canvas"), f = state.fLive || selForm(), growing = !!state.fLive;
   if (!f) {
     FormView.detach(); FormWave.stop();
@@ -2979,16 +3699,16 @@ function renderFormsCanvas() {
         <li><strong>You are the gardener.</strong> The computer proposes; you choose, prune and steer.</li></ol></details>
       <h3>Surface textures: grown on freestanding double-sided screens</h3><div class="art-grid">${E.FAMILIES.map((fm) => `<button class="art-card" data-rule-pick="${fm.key}"><div class="row"><strong>${fm.name}</strong><span class="pill">${icon(fm.key)}</span></div>
         <span class="muted">Imitates ${fm.imitates}</span><span>${fm.idea}</span></button>`).join("")}</div>
-      ${[["Natural growth: free forms", NATURAL], ["Sheet hybrids: felt sheets arranged by nature", HYBRID], ["Sound-grown, after Biothing's Genware", SOUND]].map(([title, keys]) => `<h3>${title}</h3><div class="art-grid">${keys.map((k) => `<button class="art-card" data-rule-pick="${k}"><div class="row"><strong>${G.RULES[k].name}</strong><span class="pill">${icon(k)}</span></div>
+      ${[["Natural growth: free forms", NATURAL], ["Sheet hybrids: felt sheets arranged by nature", HYBRID], ["Sound-grown, after Biothing's Genware", SOUND], ["Patterns and lattices: open them as a graph", PATTERNS]].map(([title, keys]) => `<h3>${title}</h3><div class="art-grid">${keys.map((k) => `<button class="art-card" data-rule-pick="${k}"><div class="row"><strong>${G.RULES[k].name}</strong><span class="pill">${icon(k)}</span></div>
         <span class="muted">Imitates ${G.RULES[k].imitates}</span><span>${G.RULES[k].idea}</span></button>`).join("")}</div>`).join("")}
       <p class="hint">Freestanding pieces grow a holdfast (splayed roots or a weighted plinth) and must pass a tipping test: they have to lean at least ${G.MIN_TIP_ANGLE}° before toppling.</p></div>`;
     return;
   }
   const mat = E.FELTS[f.material], bs = baselineScore(f), ratio = bs ? f.score / bs : null;
   c.innerHTML = `<div class="card"><div class="card-head"><h3>${growing ? `Growing: ${info(f.rule).name} (best so far)` : esc(f.name)}</h3>
-      <span class="hint">${f.mount === "hanging" ? "Hanging from the ceiling" : "Freestanding"} · fits in ${fix(f.size, 1)} m${f.mount === "standing" ? " × " + fix(G.envelope(f.size, "standing").height, 1) + " m high" : ""} · ${G.count(f.prims)} parts</span></div>
+      <span class="hint">${MOUNT_NAME[f.mount]} · fits in ${fix(f.size, 1)} m${f.mount === "standing" ? " × " + fix(G.envelope(f.size, "standing").height, 1) + " m high" : ""} · ${G.count(f.prims)} parts</span></div>
       <div id="fv-slot"></div>
-      <div class="row3d"><span class="muted">${esc(describeOf(f))}</span><span class="swatches"><span><i style="background:${hex(SOFT_COLORS[f.material])}"></i>${esc(mat.name)}</span></span></div></div>
+      <div class="row3d"><span class="muted">${esc(describeOf(f))}${!growing && f.kind !== "surface" ? ' <button class="chip" id="form-edit">Open in the graph</button>' : ""}</span><span class="swatches"><span><i style="background:${hex(SOFT_COLORS[f.material])}"></i>${esc(mat.name)}</span></span></div></div>
     <div class="kpis">
       ${G.BANDS.map((b, i) => `<div class="kpi"><span class="kicker">Absorption at ${hz(b)}</span><b>${fix(f.area[i], 2)} m²</b><span class="hint">per piece (Sabine)</span></div>`).join("")}
       <div class="kpi"><span class="kicker">Material</span><b>${fix(f.mass, 1)} kg</b><span class="hint">${fix(f.perKg, 2)} m² per kg${f.mass > state.fBudget ? " · over budget" : ""}</span></div>
@@ -3007,6 +3727,7 @@ function renderFormsCanvas() {
       <p class="hint">A slice through a 6 m room. A burst of sound starts in the bottom-left corner (orange and blue are high and low pressure). Green is the form. On the right: how fast the sound dies away. In an empty room it would keep ringing.</p>
       <div class="wave-wrap"><canvas id="wave-canvas" aria-label="Sound waves in the room"></canvas><svg id="wave-energy" viewBox="0 0 300 140" role="img" aria-label="Sound energy over time"></svg></div></div>`}`;
   FormView.show($("#fv-slot"), f);
+  if ($("#form-edit")) $("#form-edit").onclick = () => { state.lab.genes[f.rule] = f.genes.slice(); state.fMount = f.mount; state.allMounts = false; state.fSize = f.size; state.formSel = null; state.lab.tested = null; setTool(f.rule); };
   if (!growing) { drawMembraneCard(f); drawCutCard(f); bindFamilyCard(f); }
   if (!growing) {
     FormWave.start(f, state.fBand);
@@ -3032,31 +3753,32 @@ function formsPropsPanel() {
       ${f.stance ? `<li>Stands on ${esc(stanceText(f))}; leans ${fix(f.stance.angle, 0)}° before toppling (${f.stance.ok ? "stable" : "not stable enough"}).</li>` : ""}</ul>
     <div class="formgrid"><label for="try-mat">Try this form in</label><select id="try-mat"><option value="">choose a material…</option>
       ${Object.entries(E.FELTS).filter(([k]) => k !== f.material).map(([k, m]) => `<option value="${k}">${esc(m.name)}</option>`).join("")}</select></div>
-    <dl class="facts"><dt>Lives</dt><dd>${f.mount}</dd><dt>Envelope</dt><dd>${fix(f.size, 1)} m</dd><dt>Absorbs</dt><dd>${f.area.map((a) => fix(a, 2)).join(" / ")} m²</dd>
+    <dl class="facts"><dt>Lives</dt><dd>${MOUNT_NAME[f.mount].toLowerCase()}</dd><dt>Envelope</dt><dd>${fix(f.size, 1)} m</dd><dt>Absorbs</dt><dd>${f.area.map((a) => fix(a, 2)).join(" / ")} m²</dd>
       <dt>Per kg</dt><dd>${fix(f.perKg, 2)} m²</dd><dt>vs panel</dt><dd>${bs ? fix(f.score / bs, 1) + "×" : "measuring…"}</dd></dl>
     <div class="chips"><button class="chip" data-ask="Explain the ${esc(f.name)} form in simple words: why does it absorb sound this well or badly, and what would nature change?">Ask the guide</button>
-      ${f.kind === "surface" ? "" : `<button class="chip" id="form-seed">${(state.seeds[f.rule] || []).some((g) => g.join() === f.genes.join()) ? "In the seed library ✓" : "Add to seed library"}</button>`}
+      ${f.kind === "surface" ? "" : `<button class="chip" id="form-seed">${(state.seeds[seedKey(f.rule, f.mount)] || []).some((g) => g.join() === f.genes.join()) ? "In the seed library ✓" : `Add to ${MOUNT_NAME[f.mount].toLowerCase()} seeds`}</button>`}
       <button class="chip" id="form-obj" ${downloads ? "" : "hidden"}>Export 3D (OBJ)</button><button class="chip" id="form-to-space">Place in this room</button></div>
     ${f.kind === "surface" ? "" : `<h4>Grow further</h4>
       <p class="hint">A family keeps this form's nature but makes every piece different. A skin grows a second, finer structure on it from the speech sound.</p>
       <div class="formgrid"><label for="fam-el">Variation</label><select id="fam-el">${ELASTIC.map(([v, l]) => `<option value="${v}" ${v === state.famEl ? "selected" : ""}>${l} (±${Math.round(v * 100)}%)</option>`).join("")}</select></div>
-      <div class="chips"><button class="chip" id="form-family" ${state.fGrowing ? "disabled" : ""}>Grow 6 variants</button>${f.skin ? "" : `<button class="chip" id="form-skin" ${state.fGrowing ? "disabled" : ""}>Grow a speech skin on it</button>`}${f.cutPlan && downloads ? '<button class="chip" id="form-cut">Save cut file (SVG)</button>' : ""}</div>`}</div></details>`;
+      <div class="chips"><button class="chip" id="form-family" ${state.fGrowing ? "disabled" : ""}>Grow 6 variants</button>${f.skin ? "" : `<button class="chip" id="form-skin" ${state.fGrowing ? "disabled" : ""}>Grow a speech skin on it</button>`}${f.cutPlan && downloads ? '<button class="chip" id="form-cut">Save cut file (SVG)</button>' : ""}${f.stripPlan && downloads ? '<button class="chip" id="form-strips">Save strip cut file (SVG)</button>' : ""}${downloads ? '<button class="chip" id="form-drawing">Save drawing (SVG)</button>' : ""}</div>`}</div></details>`;
 }
 function formsLayersPanel() {
   const list = state.forms.slice().sort((a, b) => b.fitness - a.fitness);
   const nSeeds = Object.values(state.seeds).reduce((a, l) => a + l.length, 0);
+  const byMount = MOUNTS.map((m) => [m, Object.entries(state.seeds).filter(([k]) => k.endsWith("@" + m)).reduce((a, [, l]) => a + l.length, 0)]).filter(([, n]) => n);
   return `<details class="panel" ${gmode() === "forms" || state.forms.length ? "open" : ""} id="panel-forms"><summary>Grown structures</summary><div class="panel-body">
-    <p class="hint">Seed library: ${nSeeds ? `${nSeeds} seed${nSeeds === 1 ? "" : "s"}. New growth starts from them, so what grows feeds back into what grows next.` : "empty. Add forms you like (Properties) and growth will start from them."}</p>
+    <p class="hint">Seed library: ${nSeeds ? `${nSeeds} seed${nSeeds === 1 ? "" : "s"} (${byMount.map(([m, n]) => `${MOUNT_NAME[m].toLowerCase()} ${n}`).join(", ")}). New growth for that place starts from them, so what grows feeds back into what grows next.` : "empty. Add forms you like (Properties): wall, ceiling and floor seeds are kept apart."}</p>
     <div class="chips">${nSeeds ? '<button class="chip" id="seeds-clear">Clear</button>' : ""}${nSeeds && downloads ? '<button class="chip" id="seeds-save">Save seeds for the next venue</button>' : ""}<button class="chip" id="seeds-load">Load seeds…</button><input type="file" id="seeds-file" accept=".json,application/json" hidden></div>
     ${list.map((f) => `<button class="layer" data-form-pick="${f.id}" aria-pressed="${state.formSel === f.id}">
-      <span class="thumb rule-thumb">${icon(f.rule)}</span><span><strong>${esc(f.name)}</strong><small>${f.mount} · ${fix(f.mass, 1)} kg · ${esc(E.FELTS[f.material].name)}</small></span>
+      <span class="thumb rule-thumb">${icon(f.rule)}</span><span><strong>${esc(f.name)}</strong><small>${MOUNT_NAME[f.mount].toLowerCase()} · ${fix(f.mass, 1)} kg · ${esc(E.FELTS[f.material].name)}</small></span>
       <span class="mono">${fix(f.score, 2)} m²</span></button>`).join("") || '<p class="hint">Nothing grown yet. Press Grow in the options bar.</p>'}</div></details>`;
 }
 function bindFormsDock() {
   $$("[data-form-pick]").forEach((b) => b.onclick = () => {
     state.formSel = Number(b.dataset.formPick);
     const f = selForm();
-    if (gmode() !== "forms" || isSound(state.gtool) !== isSound(f.rule) || (isSound(f.rule) && state.gtool !== f.rule)) setTool(f.rule); else { renderFormsCanvas(); renderDock(); }
+    if (gmode() !== "forms" || state.gtool !== f.rule) setTool(f.rule); else { renderFormsCanvas(); renderDock(); }
   });
   if ($("#seeds-clear")) $("#seeds-clear").onclick = () => { state.seeds = {}; renderDock(); };
   if ($("#seeds-save")) $("#seeds-save").onclick = (e) => saveFile("biothing-seeds.json", seedsFile(), e.target);
@@ -3069,10 +3791,12 @@ function bindFormsDock() {
   if ($("#form-family")) $("#form-family").onclick = () => growFamily(f, 6, state.famEl);
   if ($("#form-skin")) $("#form-skin").onclick = () => growSkinOn(f);
   if ($("#form-cut")) $("#form-cut").onclick = (e) => saveFile(`biothing-cutsheet-${f.id}.svg`, cutSVG(f), e.target);
+  if ($("#form-strips")) $("#form-strips").onclick = (e) => saveFile(`biothing-strips-${f.id}.svg`, stripSVG(f), e.target);
+  if ($("#form-drawing")) $("#form-drawing").onclick = (e) => saveFile(`biothing-${f.rule}-${f.id}-front.svg`, drawingSVG(f), e.target);
   if ($("#form-seed")) $("#form-seed").onclick = () => {
-    const lib = (state.seeds[f.rule] = state.seeds[f.rule] || []);
+    const k = seedKey(f.rule, f.mount), lib = (state.seeds[k] = state.seeds[k] || []);
     if (!lib.some((g) => g.join() === f.genes.join())) lib.push(f.genes.slice());
-    addMsg("note", `“${f.name}” is in the seed library. Next time you grow ${info(f.rule).name.toLowerCase()}, evolution starts from it.`);
+    addMsg("note", `“${f.name}” is in the ${MOUNT_NAME[f.mount].toLowerCase()} seed library. Next time you grow ${info(f.rule).name.toLowerCase()} there, evolution starts from it.`);
     renderDock();
   };
   $("#form-to-space").onclick = () => {
@@ -3137,7 +3861,8 @@ function formOBJ(f) {
     if (!list.length) continue;
     faces = [];
     for (const p of list) {
-      if (G.isSheet(p)) sheet(p);
+      if (G.isTri(p)) { const base = v.length + 1; v.push(...p.tri); faces.push([base, base + 1, base + 2]); }
+      else if (G.isSheet(p)) sheet(p);
       else if (Math.hypot(...sub3(p.b, p.a)) < 1e-6) ball(p.a, p.r);
       else { tube(p.a, p.b, p.r); if (p.r > 0.012 && !p.structure) ball(p.b, p.r); }
     }
@@ -3152,59 +3877,76 @@ const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], add3 = (a, b) =>
 const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm3 = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
 
-// Instanced tubes and balls for a form, optionally repeated at several positions (Spaces).
+// Instanced tubes, balls and sheets (and a mesh for shell triangles) for a form, optionally repeated at
+// several positions [x, y, z, turn about z] (Spaces).
 function formInstances(f, positions, parent) {
-  const parts = primsOf(f.prims), o = new T3.Object3D(), up = new T3.Vector3(0, 1, 0);
-  const soft = new T3.MeshStandardMaterial({ color: SOFT_COLORS[f.material], roughness: 0.95 });
-  const hard = new T3.MeshStandardMaterial({ color: HARD_COLORS[f.structureMat || structureKey()] || 0x8d9198, roughness: 0.7 });
+  const parts = f.parts || primsOf(f.prims), o = new T3.Object3D(), up = new T3.Vector3(0, 1, 0);
+  const soft = new T3.MeshStandardMaterial({ color: SOFT_COLORS[f.material], roughness: 0.95, side: T3.DoubleSide });
+  const hard = new T3.MeshStandardMaterial({ color: HARD_COLORS[f.structureMat || structureKey()] || 0x8d9198, roughness: 0.7, side: T3.DoubleSide });
+  const place = positions.map((pos) => { const c = Math.cos(pos[3] || 0), s2 = Math.sin(pos[3] || 0); return { pt: (q) => [q[0] * c - q[1] * s2 + pos[0], q[0] * s2 + q[1] * c + pos[1], q[2] + pos[2]], vec: (q) => [q[0] * c - q[1] * s2, q[0] * s2 + q[1] * c, q[2]] }; });
   for (const [mat, list] of [[soft, parts.filter((p) => !p.structure)], [hard, parts.filter((p) => p.structure)]]) {
-    const tubes = [], balls = [], sheets = [];
+    const tubes = [], balls = [], sheets = [], tris = [];
     for (const p of list) {
-      if (G.isSheet(p)) sheets.push(p);
+      if (G.isTri(p)) tris.push(p);
+      else if (G.isSheet(p)) sheets.push(p);
       else if (Math.hypot(...sub3(p.b, p.a)) < 1e-6) balls.push(p);
       else { tubes.push(p); if (p.r > 0.012) balls.push({ a: p.b, b: p.b, r: p.r }); }
     }
     if (tubes.length) {
-      const inst = new T3.InstancedMesh(new T3.CylinderGeometry(1, 1, 1, 8), mat, tubes.length * positions.length);
+      const inst = new T3.InstancedMesh(new T3.CylinderGeometry(1, 1, 1, 8), mat, tubes.length * place.length);
       let i = 0;
-      for (const off of positions) for (const p of tubes) {
-        const a = new T3.Vector3(p.a[0] + off[0], p.a[1] + off[1], p.a[2] + off[2]), b = new T3.Vector3(p.b[0] + off[0], p.b[1] + off[1], p.b[2] + off[2]), d = b.clone().sub(a), L = d.length();
+      for (const T of place) for (const p of tubes) {
+        const a = new T3.Vector3(...T.pt(p.a)), b = new T3.Vector3(...T.pt(p.b)), d = b.clone().sub(a), L = d.length();
         o.position.copy(a).add(b).multiplyScalar(0.5); o.quaternion.setFromUnitVectors(up, d.normalize()); o.scale.set(p.r, L, p.r); o.updateMatrix(); inst.setMatrixAt(i++, o.matrix);
       }
       parent.add(inst);
     }
     if (balls.length) {
-      const inst = new T3.InstancedMesh(new T3.SphereGeometry(1, 14, 10), mat, balls.length * positions.length);
+      const inst = new T3.InstancedMesh(new T3.SphereGeometry(1, 14, 10), mat, balls.length * place.length);
       let i = 0;
       o.quaternion.identity();
-      for (const off of positions) for (const p of balls) { o.position.set(p.a[0] + off[0], p.a[1] + off[1], p.a[2] + off[2]); o.scale.set(p.r, p.r, p.r); o.updateMatrix(); inst.setMatrixAt(i++, o.matrix); }
+      for (const T of place) for (const p of balls) { o.position.set(...T.pt(p.a)); o.scale.set(p.r, p.r, p.r); o.updateMatrix(); inst.setMatrixAt(i++, o.matrix); }
       parent.add(inst);
     }
     if (sheets.length) {
-      const inst = new T3.InstancedMesh(new T3.BoxGeometry(1, 1, 1), mat, sheets.length * positions.length), m4 = new T3.Matrix4();
+      const inst = new T3.InstancedMesh(new T3.BoxGeometry(1, 1, 1), mat, sheets.length * place.length), m4 = new T3.Matrix4();
       let i = 0;
-      for (const off of positions) for (const p of sheets) {
-        const u = new T3.Vector3(...p.u), v = new T3.Vector3(...p.v), Lu = u.length(), Lv = v.length(), n = u.clone().cross(v).normalize();
+      for (const T of place) for (const p of sheets) {
+        const u = new T3.Vector3(...T.vec(p.u)), v = new T3.Vector3(...T.vec(p.v)), Lu = u.length(), Lv = v.length(), n = u.clone().cross(v).normalize();
         m4.makeBasis(u.clone().normalize(), v.clone().normalize(), n);
         m4.scale(new T3.Vector3(2 * Lu, 2 * Lv, p.t));
-        m4.setPosition(p.c[0] + off[0], p.c[1] + off[1], p.c[2] + off[2]);
+        m4.setPosition(...T.pt(p.c));
         inst.setMatrixAt(i++, m4);
       }
       parent.add(inst);
+    }
+    if (tris.length) {
+      const pos = new Float32Array(tris.length * place.length * 9);
+      let i = 0;
+      for (const T of place) for (const p of tris) for (const q of p.tri) { const w = T.pt(q); pos[i++] = w[0]; pos[i++] = w[1]; pos[i++] = w[2]; }
+      const geo = new T3.BufferGeometry();
+      geo.setAttribute("position", new T3.BufferAttribute(pos, 3));
+      geo.computeVertexNormals();
+      parent.add(new T3.Mesh(geo, mat));
     }
   }
 }
 
 // 3D view of one form with its ceiling or floor, and a person for scale when it stands.
 const FormView = (() => {
-  let v = null, shown = null;
+  let v = null, shown = null, framed = "";
   function build(f) {
     v.clear();
     formInstances(f, [[0, 0, 0]], v.root);
-    const S = f.size, H = G.envelope(S, f.mount).height, grey = new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1 });
-    const slab = new T3.Mesh(new T3.BoxGeometry(S * 1.6, S * 1.6, 0.02), f.mount === "hanging" ? new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1, transparent: true, opacity: 0.55 }) : grey);
-    slab.position.set(0, 0, f.mount === "hanging" ? 0.01 : -0.01);
-    v.root.add(slab);
+    const S = f.size, H = f.mount === "hanging" ? S : G.envelope(S, f.mount).height, grey = new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1 });
+    if (f.mount === "wall") {
+      const wall = new T3.Mesh(new T3.BoxGeometry(S * 1.6, 0.02, H * 1.4), grey);
+      wall.position.set(0, -0.012, H / 2); v.root.add(wall);
+    } else {
+      const slab = new T3.Mesh(new T3.BoxGeometry(S * 1.6, S * 1.6, 0.02), f.mount === "hanging" ? new T3.MeshStandardMaterial({ color: 0x55585e, roughness: 1, transparent: true, opacity: 0.55 }) : grey);
+      slab.position.set(0, 0, f.mount === "hanging" ? 0.01 : -0.01);
+      v.root.add(slab);
+    }
     if (f.mount === "standing") {
       const body = new T3.MeshStandardMaterial({ color: 0x8d9198, roughness: 1 }), x = S / 2 + 0.45;
       const part = (geo, z) => { const m = new T3.Mesh(geo, body); m.rotation.x = Math.PI / 2; m.position.set(x, 0, z); v.root.add(m); };
@@ -3212,15 +3954,19 @@ const FormView = (() => {
       part(new T3.CylinderGeometry(0.16, 0.12, 0.65, 12), 1.18);
       const head = new T3.Mesh(new T3.SphereGeometry(0.11, 16, 12), body); head.position.set(x, 0, 1.62); v.root.add(head);
     }
+    // keep the camera where the person left it while the same kind of piece regrows
+    const frame = [f.mount, S, H].join();
+    if (frame === framed) return;
+    framed = frame;
     const midZ = f.mount === "hanging" ? -H / 2 : H / 2;
-    Object.assign(v.orbit, { target: [f.mount === "standing" ? 0.25 : 0, 0, midZ], dist: Math.max(S, H) * 2.4, theta: -0.9, phi: f.mount === "hanging" ? 1.85 : 1.2 });
+    Object.assign(v.orbit, { target: [f.mount === "standing" ? 0.25 : 0, f.mount === "wall" ? 0.1 : 0, midZ], dist: Math.max(S, H) * 2.4, theta: f.mount === "wall" ? 1.2 : -0.9, phi: f.mount === "hanging" ? 1.85 : 1.2 });
   }
   return {
     show(slot, f) {
       if (!v) v = makeViewer({ up: "z", cls: "viewport shape-view" });
-      slot.replaceWith(v.el);
+      if (slot && slot !== v.el) slot.replaceWith(v.el);
       if (!v.ok) return;
-      const sig = f.id + ":" + f.fitness + ":" + f.prims.length;
+      const sig = f.id + ":" + f.fitness + ":" + (f.parts ? f.parts.length : f.prims.length);
       if (shown !== sig) { shown = sig; build(f); }
       v.draw();
     },
@@ -3298,7 +4044,7 @@ const FormWave = (() => {
 // a cellular membrane. Three sources: the target sound, a sound file, or a room's own resonances.
 ICONS.allsurf = '<rect x="2" y="4" width="16" height="4" rx="1"/><path d="M3 12 L6 16 L9 12 L12 16 L15 12 L17 15"/>';
 ICONS.membrane = '<path d="M2 9 C4 3 6 3 8 9 S12 15 14 9 S18 3 18 9"/><path d="M3 16 H17"/>';
-state.gw = { source: "target", spaceId: null, file: null, field: null, key: "", busy: false };
+state.gw = { source: "target", spaceId: null, file: null, field: null, key: "", busy: false, cache: {}, geo: { x: 0.5, z: 0.5, angle: 30, f1: 3, f2: 5, seed: 1 } };
 state.seeds = {}; // Genware's "library of seeds": genomes the designer keeps, per growth rule
 
 function gwRoom() {
@@ -3307,44 +4053,76 @@ function gwRoom() {
   const { min, max } = sp.info, a = max[0] - min[0], b = max[1] - min[1];
   return { name: sp.name, L: Math.max(a, b), W: Math.min(a, b), H: max[2] - min[2], id: sp.id };
 }
-const gwKey = () => JSON.stringify([state.gw.source, gwRoom(), state.fSize, state.fMount, state.target, state.gw.file && state.gw.file.name]);
+const GEO = { attractor: "an attractor point", gradient: "a gradient", radial: "rings", waves: "two interfering waves", noise: "soft noise" };
+const isGeo = (src) => !!GEO[src];
+const gwKey = (mount = state.fMount) => JSON.stringify([state.gw.source, isGeo(state.gw.source) ? state.gw.geo : 0, gwRoom(), state.fSize, mount, state.target, state.gw.file && state.gw.file.name]);
 function gwLabel() {
   const room = gwRoom().name, f = state.gw.file;
+  if (isGeo(state.gw.source)) return GEO[state.gw.source] + " (drawn)";
   if (state.gw.source === "file") return `your recording “${f.name}”${f.bpm ? ` (${Math.round(f.bpm)} BPM)` : ""} in ${room}`;
   if (state.gw.source === "room") return `the resonances of ${room}`;
   return `${TARGET_INFO[state.target].label.toLowerCase()} in ${room}`;
 }
 const selMembrane = () => { const f = selForm(); return f && isSound(f.rule) && f.rule === state.fRule ? f : null; };
-
-async function computeField() {
-  if (state.gw.field && state.gw.key === gwKey()) return state.gw.field;
+// A field that only varies along one axis, spread over the whole face (sound sampled along a wall or a ceiling).
+function spread(fl, alongRows, nx = 24, nz = 36) {
+  const out = new Float32Array(nx * nz);
+  for (let k = 0; k < nz; k++) for (let i = 0; i < nx; i++) {
+    let s2 = 0;
+    if (alongRows) { const kk = Math.round((k / (nz - 1)) * (fl.nz - 1)); for (let ii = 0; ii < fl.nx; ii++) s2 += fl.data[ii + fl.nx * kk] / fl.nx; }
+    else { const ii = Math.round((i / (nx - 1)) * (fl.nx - 1)); for (let kk = 0; kk < fl.nz; kk++) s2 += fl.data[ii + fl.nx * kk] / fl.nz; }
+    out[i + nx * k] = s2;
+  }
+  let lo = Infinity, hi = -Infinity;
+  for (const v of out) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  return { data: out.map((v) => (hi > lo ? (v - lo) / (hi - lo) : 0.5)), nx, nz };
+}
+// Synchronous part: a drawn field, or a sound field already computed for this mount.
+function fieldNow(mount = state.fMount) {
+  const key = gwKey(mount);
+  if (state.gw.cache[key]) return state.gw.cache[key];
+  if (!isGeo(state.gw.source)) return null;
+  const f = G.patternField({ kind: state.gw.source, ...state.gw.geo });
+  f.label = gwLabel();
+  return (state.gw.cache[key] = f);
+}
+async function computeField(mount = state.fMount) {
+  const ready = fieldNow(mount);
+  if (ready) { if (mount === state.fMount) { state.gw.field = ready; state.gw.key = gwKey(mount); } return ready; }
   if (state.gw.busy) return null;
-  if (state.gw.source === "file" && !state.gw.file) { addMsg("note", "Choose a sound file first, or pick another sound source."); return null; }
+  if (state.gw.source === "file" && !state.gw.file) { addMsg("note", "Choose a sound file first, or pick another field source."); return null; }
   state.gw.busy = true;
   renderDock();
   await new Promise((r) => setTimeout(r, 30));
   try {
-    const room = gwRoom(), env = G.envelope(state.fSize, state.fMount);
+    const room = gwRoom(), env = G.envelope(state.fSize, mount);
     const L = Math.min(16, Math.max(3, room.L)), H = Math.min(6, Math.max(2.4, room.H)), W = Math.max(2, room.W);
-    const x0 = 0.62 * L, width = state.fSize, height = env.height, zBase = state.fMount === "hanging" ? Math.max(0, H - height) : 0;
+    const width = state.fSize, height = mount === "hanging" ? state.fSize : env.height, zWall = Math.max(0, Math.min(1.0, H - height));
+    const x0 = 0.62 * L, zBase = mount === "hanging" ? Math.max(0, H - height) : mount === "wall" ? zWall : 0;
     let field;
-    if (state.gw.source === "room") field = G.fieldFromModes({ L, W, H, x0, y0: 0.37 * W, width, height, zBase });
-    else {
-      const sec = { w: L, h: H, cx: x0 }, src = [Math.max(0.5, x0 - 2), Math.min(H - 0.3, 1.5)];
-      field = state.gw.source === "file"
-        ? G.fieldFromSound({ room: sec, signal: state.gw.file.signal, x0, width, height, src, zBase })
-        : G.fieldFromSound({ room: sec, weights: formBandWeights(), x0, width, height, src, zBase });
-      if (state.gw.source === "file") field.rhythm = { bpm: state.gw.file.bpm, strength: state.gw.file.strength };
+    if (state.gw.source === "room") {
+      field = mount === "wall" ? G.fieldFromModes({ L, W, H, x0, y0: 0.03, width, height, zBase })
+        : mount === "hanging" ? G.fieldFromModes({ L, W, H, x0, y0: 0.37 * W, width, height, ceilingZ: H - 0.3 })
+        : G.fieldFromModes({ L, W, H, x0, y0: 0.37 * W, width, height, zBase });
+    } else {
+      const sec = { w: L, h: H, cx: x0 }, src = [Math.max(0.5, x0 - 2), Math.min(H - 0.3, 1.5)], file = state.gw.source === "file";
+      const run = (o) => G.fieldFromSound({ room: sec, ...(file ? { signal: state.gw.file.signal } : { weights: formBandWeights() }), src, ...o });
+      // The 2D section sees a wall only by height and a ceiling only along its length, so the field is spread across.
+      field = mount === "wall" ? { ...spread(run({ x0: 0.2, width: 0.3, height, zBase }), true) }
+        : mount === "hanging" ? { ...spread(run({ x0, width, height: 0.3, zBase: H - 0.35 }), false) }
+        : run({ x0, width, height, zBase });
+      if (file) field.rhythm = { bpm: state.gw.file.bpm, strength: state.gw.file.strength };
     }
     field.label = gwLabel();
     field.room = { L, W, H };
-    state.gw.field = field; state.gw.key = gwKey();
+    state.gw.cache[gwKey(mount)] = field;
+    if (mount === state.fMount) { state.gw.field = field; state.gw.key = gwKey(mount); }
+    return field;
   } finally {
     state.gw.busy = false;
+    renderDock();
+    if (gmode() === "forms" && !state.fGrowing) renderFormsCanvas();
   }
-  renderDock();
-  if (!selMembrane() && gmode() === "forms") renderFormsCanvas();
-  return state.gw.field;
 }
 
 // Iterative radix-2 FFT (in place); N must be a power of two.
@@ -3468,24 +4246,38 @@ function gwIntro() {
 }
 
 function soundPanel() {
-  if (!isSound(state.fRule)) return "";
-  const g = state.gw, room = gwRoom(), fl = g.file, ready = g.field && g.key === gwKey();
-  return `<details class="panel" open id="panel-sound"><summary>Sound source</summary><div class="panel-body">
-    <label class="matrow"><input type="radio" name="gw-src" value="target" ${g.source === "target" ? "checked" : ""}><span>Target sound<small>${TARGET_INFO[state.target].label} (set it under Quiet in the options bar)</small></span><span></span></label>
-    <label class="matrow"><input type="radio" name="gw-src" value="file" ${g.source === "file" ? "checked" : ""} ${fl ? "" : "disabled"}><span>A sound file<small>${fl ? `${esc(fl.name)} · ${fl.bpm ? Math.round(fl.bpm) + " BPM" : "no clear beat"}` : "a recording of your hall, voices or music"}</small></span><span></span></label>
+  if (!usesField(state.fRule)) return "";
+  const g = state.gw, room = gwRoom(), fl = g.file, ready = !!fieldNow(), geo = g.geo;
+  const radio = (v, title, sub, dis) => `<label class="matrow"><input type="radio" name="gw-src" value="${v}" ${g.source === v ? "checked" : ""} ${dis ? "disabled" : ""}><span>${title}<small>${sub}</small></span><span></span></label>`;
+  const slider = (k, label, min, max, step) => `<label for="geo-${k}">${label}</label><span class="rowc"><input type="range" id="geo-${k}" data-geo="${k}" min="${min}" max="${max}" step="${step}" value="${geo[k]}"><output class="mono">${geo[k]}</output></span>`;
+  const geoCtl = { attractor: [["x", "Across", 0, 1, 0.01], ["z", "Up", 0, 1, 0.01], ["f1", "Tightness", 1, 8, 0.5]], gradient: [["angle", "Angle (°)", 0, 360, 5]], radial: [["x", "Across", 0, 1, 0.01], ["z", "Up", 0, 1, 0.01], ["f1", "Rings", 1, 8, 0.5]],
+    waves: [["f1", "Wave 1", 1, 9, 0.5], ["f2", "Wave 2", 1, 9, 0.5], ["angle", "Angle (°)", 0, 180, 5]], noise: [["seed", "Seed", 1, 50, 1]] }[g.source];
+  return `<details class="panel" open id="panel-sound"><summary>Field: what steers the growth</summary><div class="panel-body">
+    <span class="kicker">From sound</span>
+    ${radio("target", "Target sound", `${TARGET_INFO[state.target].label} (Quiet in the options bar)`)}
+    ${radio("file", "A sound file", fl ? `${esc(fl.name)} · ${fl.bpm ? Math.round(fl.bpm) + " BPM" : "no clear beat"}` : "a recording of your hall, voices or music", !fl)}
     <div class="chips"><button class="chip" id="gw-file-btn">${fl ? "Choose another file…" : "Choose sound file…"}</button><input type="file" id="gw-file" accept="audio/*" hidden></div>
     ${fl ? bandsMini(fl.bands) : ""}
-    <label class="matrow"><input type="radio" name="gw-src" value="room" ${g.source === "room" ? "checked" : ""}><span>Room resonances<small>the low pitches that ring in the room below</small></span><span></span></label>
-    <div class="formgrid"><label for="gw-space">Room</label><select id="gw-space">${state.spaces.map((s) => `<option value="${s.id}" ${s.id === room.id ? "selected" : ""}>${esc(s.name)}</option>`).join("") || "<option>6 m test room</option>"}</select></div>
-    <button class="btn small" id="gw-compute" ${g.busy ? "disabled" : ""}>${g.busy ? "Listening…" : ready ? "Field ready ✓" : "Compute the sound field"}</button></div></details>`;
+    ${radio("room", "Room resonances", "the low pitches that ring in the room")}
+    <div class="formgrid"><label for="gw-space">Room</label><select id="gw-space">${state.spaces.map((sp) => `<option value="${sp.id}" ${sp.id === room.id ? "selected" : ""}>${esc(sp.name)}</option>`).join("") || "<option>6 m test room</option>"}</select></div>
+    ${isGeo(g.source) ? "" : `<button class="btn small" id="gw-compute" ${g.busy ? "disabled" : ""}>${g.busy ? "Listening…" : ready ? "Field ready ✓" : "Compute the sound field"}</button>`}
+    <span class="kicker">Drawn by hand, for inspiration</span>
+    ${radio("attractor", "Attractor point", "strongest around one point")}${radio("gradient", "Gradient", "from one side to the other")}${radio("radial", "Rings", "ripples around a point")}
+    ${radio("waves", "Two interfering waves", "as in Biothing's laser-cut ceiling")}${radio("noise", "Soft noise", "random but smooth, like dunes")}
+    ${geoCtl ? `<div class="formgrid">${geoCtl.map((c) => slider(...c)).join("")}</div>` : ""}</div></details>`;
 }
 function bindSoundPanel() {
   if (!$("#panel-sound")) return;
-  $$('input[name="gw-src"]').forEach((r) => r.onchange = () => { state.gw.source = r.value; state.gw.field = null; renderDock(); renderFormsCanvas(); });
+  const changed = () => { state.gw.field = null; renderDock(); renderFormsCanvas(); };
+  $$('input[name="gw-src"]').forEach((r) => r.onchange = () => { state.gw.source = r.value; changed(); });
   $("#gw-file-btn").onclick = () => $("#gw-file").click();
   $("#gw-file").onchange = (e) => loadSound(e.target.files[0]);
-  $("#gw-space").onchange = (e) => { state.gw.spaceId = Number(e.target.value) || null; state.gw.field = null; renderDock(); renderFormsCanvas(); };
-  $("#gw-compute").onclick = () => { state.gw.field = null; computeField(); };
+  $("#gw-space").onchange = (e) => { state.gw.spaceId = Number(e.target.value) || null; changed(); };
+  if ($("#gw-compute")) $("#gw-compute").onclick = () => { delete state.gw.cache[gwKey()]; computeField(); };
+  $$("[data-geo]").forEach((inp) => {
+    inp.oninput = () => { state.gw.geo[inp.dataset.geo] = Number(inp.value); inp.nextElementSibling.textContent = inp.value; state.gw.field = null; if (isLab(state.fRule) || isSound(state.fRule)) labRefreshField(); };
+    inp.onchange = () => renderFormsCanvas();
+  });
 }
 
 // For a grown membrane: the field it started from, and the field after it reshaped it.
@@ -3634,11 +4426,12 @@ async function growFamily(f, n, elasticity) {
 }
 // A front view (x, z) of a form as a small drawing.
 function silhouette(f, w = 120, h = 150) {
-  const parts = primsOf(f.prims), b = G.bounds(parts), k = Math.min(w / (b.max[0] - b.min[0] || 1), h / (b.max[2] - b.min[2] || 1)) * 0.92;
+  const all = primsOf(f.prims), step = Math.max(1, Math.ceil(all.length / 2500)), parts = all.filter((_, i) => i % step === 0), b = G.bounds(all), k = Math.min(w / (b.max[0] - b.min[0] || 1), h / (b.max[2] - b.min[2] || 1)) * 0.92;
   const cx = (b.min[0] + b.max[0]) / 2, cz = (b.min[2] + b.max[2]) / 2, X = (x) => (w / 2 + (x - cx) * k).toFixed(1), Z = (z) => (h / 2 - (z - cz) * k).toFixed(1);
   let out = "";
   for (const p of parts) {
     const col = p.structure ? "#8d9198" : "var(--accent)";
+    if (G.isTri(p)) { out += `<polygon points="${p.tri.map((q) => `${X(q[0])},${Z(q[2])}`).join(" ")}" fill="${col}" fill-opacity="0.2"/>`; continue; }
     if (G.isSheet(p)) {
       const pts = [[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([a, c]) => `${X(p.c[0] + a * p.u[0] + c * p.v[0])},${Z(p.c[2] + a * p.u[2] + c * p.v[2])}`).join(" ");
       out += `<polygon points="${pts}" fill="${col}" fill-opacity="0.3" stroke="${col}" stroke-width="0.4"/>`;
@@ -3681,8 +4474,20 @@ function bindFamilyCard(f) {
 
 // The room as a field of probabilities (Biothing's tower: uses find probable places in a field,
 // instead of a fixed bubble diagram). Layouts are drawn from the map by chance; each is a proposal.
+// Wall modules in rows along the four walls (from 1 m up), turned so they grow into the room.
+function wallSpots(sp, size, n, skip = 0) {
+  const { min, max } = sp.info, W = max[0] - min[0], D = max[1] - min[1], H = max[2] - min[2], pitch = size + 0.3;
+  const walls = [{ len: W, at: (t) => [min[0] + t, min[1]], rot: 0 }, { len: D, at: (t) => [max[0], min[1] + t], rot: Math.PI / 2 },
+    { len: W, at: (t) => [max[0] - t, max[1]], rot: Math.PI }, { len: D, at: (t) => [min[0], max[1] - t], rot: -Math.PI / 2 }];
+  const all = [];
+  for (let z = 1.0; z + size <= H - 0.15 && all.length < skip + n; z += size + 0.25) for (const w of walls) {
+    const slots = Math.max(0, Math.floor((w.len - 0.6) / pitch)), start = (w.len - slots * pitch) / 2 + pitch / 2;
+    for (let k = 0; k < slots; k++) { const [x, y] = w.at(start + k * pitch); all.push([x, y, min[2] + z, w.rot]); }
+  }
+  return all.slice(skip, skip + n);
+}
 function roomBox(sp) { const { min, max } = sp.info; return { min, lx: max[0] - min[0], ly: max[1] - min[1], H: max[2] - min[2] }; }
-const formPlacements = (sp) => sp.placements.filter((pl) => isForm(pl.family) && formOf(pl.family) && pl.area > 0);
+const formPlacements = (sp) => sp.placements.filter((pl) => isForm(pl.family) && formOf(pl.family) && pl.area > 0 && formOf(pl.family).mount !== "wall");
 function roomMap(sp) {
   const { lx, ly, H } = roomBox(sp), need = R.OCTAVES.map((f) => E.TARGETS.room[f] || 0);
   const piece = Math.max(state.fSize, ...formPlacements(sp).map((pl) => formOf(pl.family).size));
@@ -3734,13 +4539,219 @@ function loadSeeds(file) {
     if (!lib || typeof lib !== "object") throw new Error("no seeds in this file");
     let n = 0;
     for (const [rule, list] of Object.entries(lib)) {
-      if (!G.RULES[rule] || !Array.isArray(list)) continue;
-      const mine = (state.seeds[rule] = state.seeds[rule] || []);
-      for (const g of list) if (Array.isArray(g) && g.length === G.geneCount(rule) && g.every((x) => typeof x === "number" && x >= 0 && x <= 1) && !mine.some((m) => m.join() === g.join())) { mine.push(g.slice()); n++; }
+      const [r0, m0] = rule.split("@"), key = seedKey(r0, MOUNTS.includes(m0) ? m0 : "standing");
+      if (!G.RULES[r0] || !Array.isArray(list)) continue;
+      const mine = (state.seeds[key] = state.seeds[key] || []);
+      for (const g of list) if (Array.isArray(g) && g.length === G.geneCount(r0) && g.every((x) => typeof x === "number" && x >= 0 && x <= 1) && !mine.some((m) => m.join() === g.join())) { mine.push(g.slice()); n++; }
     }
     addMsg("note", `Loaded ${n} seed${n === 1 ? "" : "s"}${Array.isArray(j.venues) && j.venues.length ? ` grown for ${j.venues.slice(0, 3).map(String).join(", ")}` : ""}. New growth starts from them.`);
     renderDock();
   }).catch((err) => addMsg("note", "Could not read that seed file: " + err.message));
+}
+
+// ------------------------------------------------------------- the graph ---
+// Every growth rule as a chain of nodes, like Grasshopper or nTop: seed and place, field, the rule's
+// own values (cell, response to the field, holdfast), material, evolution. Drag a value and the
+// preview regrows at once; lock a value to keep it while evolving, or narrow the range evolution explores.
+const UNIT_SCALE = { cm: 100, mm: 1000, "%": 100, "°": 1, "": 1 }, HOLD_NODE = "Holdfast (freestanding)";
+const STANCE_LABELS = ["Root flare", "Holdfast: roots or plinth", "Base size", "Number of roots"];
+const nice = (k) => k.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase());
+function paramSchema(rule) {
+  const R = G.RULES[rule];
+  if (R.params) return R.params.map((p, i) => ({ ...p, i }));
+  const out = R.genes.map((k, i) => ({ label: nice(k), min: 0, max: 1, unit: "%", node: "Growth rule", i }));
+  if (!R.direct) STANCE_LABELS.forEach((l, j) => out.push({ label: l, min: 0, max: 1, unit: "%", node: HOLD_NODE, i: R.genes.length + j }));
+  return out;
+}
+function fmtParam(p, g) {
+  const x = Math.max(0, Math.min(1, g));
+  if (p.options) return p.options[Math.min(p.options.length - 1, Math.floor(x * p.options.length))];
+  const v = p.min + (p.max - p.min) * x;
+  if (p.round) return String(Math.round(v));
+  const d = v * UNIT_SCALE[p.unit];
+  return (Math.abs(d) >= 10 || p.unit === "°" ? d.toFixed(0) : d.toFixed(1)) + (p.unit ? (p.unit === "°" ? "°" : " " + p.unit) : "");
+}
+let labTimer = 0, playRaf = 0;
+function labField(rule) {
+  if (!usesField(rule)) return null;
+  const f = fieldNow();
+  return f ? { data: f.data, nx: f.nx, nz: f.nz, rhythm: f.rhythm || null } : null;
+}
+// Growth order for "Watch it grow": the order the rule made its parts, or print layers for lattices and shells.
+function growOrder(rule, prims, mount) {
+  const idx = prims.map((_, i) => i), R = G.RULES[rule];
+  if (R.group !== "lattice" && rule !== "bioform") return idx;
+  const key = (p) => { const c = G.isTri(p) ? p.tri[0] : G.isSheet(p) ? p.c : p.a; return mount === "hanging" ? -c[2] : mount === "wall" ? c[1] * 4 + c[2] * 0.01 : c[2]; };
+  return idx.sort((a, b) => key(prims[a]) - key(prims[b]));
+}
+function labBuild(rule) {
+  const genes = labGenes(rule), mat = materialOf(rule, genes), m = E.FELTS[mat], sKey = printKey(rule), job = labField(rule);
+  const prims = G.grow(rule, genes, { mount: state.fMount, size: state.fSize, field: job, material: { sigma: m.sigma, density: m.density } });
+  state.lab.preview = { id: "lab", rule, genes: genes.slice(), mount: state.fMount, size: state.fSize, material: mat, structureMat: sKey, parts: prims, all: prims, order: growOrder(rule, prims, state.fMount),
+    ins: G.inspect(prims, m.density, E.RIGIDS[sKey].density, state.fMount), srcField: job, sourceLabel: job ? fieldNow().label : null, cutPlan: prims.cutPlan || null, stripPlan: prims.stripPlan || null, holdfast: prims.label };
+}
+function showPreview(frac = state.lab.grow) {
+  const pv = state.lab.preview;
+  if (!pv || !$("#lab-card")) return;
+  const n = Math.max(1, Math.round(pv.order.length * frac));
+  FormView.show($("#fv-slot"), { ...pv, parts: frac >= 1 ? pv.all : pv.order.slice(0, n).map((i) => pv.all[i]), fitness: Math.random() });
+  const ins = pv.ins, st = ins.stance;
+  $("#lab-stats").textContent = `${pv.all.length} parts · ${fix(ins.mass, 1)} kg ${E.FELTS[pv.material].name.toLowerCase()}${ins.printMass > 0.05 ? ` · ${fix(ins.printMass, 1)} kg ${E.RIGIDS[pv.structureMat].name.toLowerCase()}` : ""}${st ? ` · ${st.ok ? "stands" : "would topple"} (${fix(st.angle, 0)}°)` : ""}`;
+  $("#lab-desc").textContent = G.RULES[pv.rule].describe(pv.genes) + (pv.holdfast ? ` Held by ${pv.holdfast}.` : "");
+}
+function labRebuild(delay = 90) {
+  clearTimeout(labTimer);
+  labTimer = setTimeout(() => { if (!$("#lab-card")) return; labBuild(state.fRule); showPreview(); labTestOut(); }, delay);
+}
+function labRefreshField() {
+  const cv = $("#lab-field"), f = fieldNow();
+  if (cv && f) drawField(cv, f, null, state.fSize, state.fMount === "hanging" ? state.fSize : G.envelope(state.fSize, state.fMount).height, "standing");
+  labRebuild();
+}
+function labTestOut() {
+  const out = $("#lab-test-out"), t = state.lab.tested, pv = state.lab.preview;
+  if (!out) return;
+  if (!t) { out.innerHTML = '<p class="hint">Press <strong>Test</strong> to send sound through this exact form (about a second), or <strong>Evolve</strong> to search within your ranges.</p>'; return; }
+  const r = t.r, stale = !pv || t.key !== pv.genes.join() + pv.mount + pv.size, bs = t.base.reduce((a, x, i) => a + x * formBandWeights()[i], 0);
+  out.innerHTML = `<div class="kpis">${G.BANDS.map((b, i) => `<div class="kpi"><span class="kicker">At ${hz(b)}</span><b>${fix(r.area[i], 2)} m²</b><span class="hint">per piece</span></div>`).join("")}
+    <div class="kpi"><span class="kicker">Versus a flat panel</span><b>${bs > 1e-4 ? fix(r.score / bs, 1) + "×" : "–"}</b><span class="hint">same felt and kg</span></div></div>
+    <p class="hint">${stale ? "You changed values since this test. " : ""}${r.mass < 0.01 ? "No felt in it yet: printed struts and shells barely absorb on their own; add felt (cells filled with felt)." : ""}</p>
+    <div class="chips"><button class="btn small primary" id="lab-keep" ${stale ? "disabled" : ""}>Keep this one</button></div>`;
+  if ($("#lab-keep")) $("#lab-keep").onclick = () => { const f = addForm({ ...t.r }, null); state.formSel = f.id; state.lab.tested = null; addMsg("note", `Kept ${f.name}.`); renderAll(); };
+}
+async function labTest(rule) {
+  const pv = state.lab.preview;
+  if (!pv) return;
+  $("#lab-test-out").innerHTML = '<p class="hint">Sending sound through it…</p>';
+  const m = E.FELTS[pv.material], material = { sigma: m.sigma, density: m.density };
+  try {
+    const r = await Pool.run("evaluate", { rule, genes: pv.genes, mount: pv.mount, size: pv.size, material, budget: state.fBudget, weights: formBandWeights(), structureDensity: E.RIGIDS[pv.structureMat].density, field: pv.srcField });
+    const b = await Pool.run("baseline", { material, mass: Math.max(r.mass, 1e-3) });
+    state.lab.tested = { key: pv.genes.join() + pv.mount + pv.size, r: { ...r, material: pv.material, structureMat: pv.structureMat, ...(pv.srcField ? { srcField: pv.srcField, sourceLabel: pv.sourceLabel } : {}) }, base: b.area };
+  } catch (err) { addMsg("note", "The test stopped: " + err.message); }
+  labTestOut();
+}
+function playGrowth() {
+  cancelAnimationFrame(playRaf);
+  const t0 = performance.now(), dur = 3200;
+  let last = 0;
+  const step = (now) => {
+    if (!$("#lab-grow")) return;
+    const u = Math.min(1, (now - t0) / dur);
+    if (now - last > 60 || u >= 1) { last = now; state.lab.grow = u; $("#lab-grow").value = u; showPreview(u); }
+    if (u < 1) playRaf = requestAnimationFrame(step);
+  };
+  playRaf = requestAnimationFrame(step);
+}
+function labView(rule) {
+  const c = $("#struct-zone") || $("#canvas"), R = G.RULES[rule], genes = labGenes(rule), locks = labLocks(rule), ranges = labRanges(rule), schema = paramSchema(rule);
+  FormWave.stop();
+  const standing = state.fMount === "standing" || state.allMounts, nodes = [];
+  for (const p of schema) { if (p.node === HOLD_NODE && !standing) continue; let nd = nodes.find((x) => x.name === p.node); if (!nd) nodes.push((nd = { name: p.node, ps: [] })); nd.ps.push(p); }
+  const prm = (p) => {
+    const g = genes[p.i], lk = locks[p.i], [lo, hi] = ranges[p.i];
+    const ctl = p.options ? `<select data-prm="${p.i}" aria-label="${esc(p.label)}">${p.options.map((o, k) => `<option value="${(k + 0.5) / p.options.length}" ${Math.min(p.options.length - 1, Math.floor(g * p.options.length)) === k ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`
+      : `<input type="range" data-prm="${p.i}" min="0" max="1" step="0.005" value="${g}" aria-label="${esc(p.label)}">`;
+    return `<div class="prm ${lk ? "locked" : ""}"><div class="prm-head"><span>${esc(p.label)}</span><output id="prm-out-${p.i}" class="mono">${p.options ? "" : fmtParam(p, g)}</output>
+        <button class="lock" data-lock="${p.i}" aria-pressed="${lk}" title="${lk ? "Locked: evolution keeps this value" : "Free: evolution may change it"}">${lk ? "locked" : "free"}</button></div>${ctl}
+      ${state.lab.showRanges && !p.options && !lk ? `<div class="rng"><input type="range" data-lo="${p.i}" min="0" max="1" step="0.01" value="${lo}" aria-label="Lowest value evolution may try"><input type="range" data-hi="${p.i}" min="0" max="1" step="0.01" value="${hi}" aria-label="Highest value evolution may try"><small id="rng-out-${p.i}">${fmtParam(p, lo)} to ${fmtParam(p, hi)}</small></div>` : ""}</div>`;
+  };
+  const f = fieldNow(), lattice = R.group === "lattice", ev = state.evo;
+  c.innerHTML = `<div class="card graph-card"><div class="card-head"><h3>${esc(R.name)} · graph</h3>
+      <div class="chips"><button class="chip" id="lab-rand">Random values</button><button class="chip" id="lab-reset">Reset</button><button class="chip" id="lab-ranges" aria-pressed="${state.lab.showRanges}">Evolution ranges</button></div></div>
+    <p class="hint">Imitates ${esc(R.imitates)}. ${esc(R.idea)}</p>
+    <div class="graph">
+      <section class="node"><h4>Seed and place</h4>
+        <div class="segd" role="group" aria-label="Where it goes">${[["standing", "Floor"], ["wall", "Wall"], ["hanging", "Ceiling"]].map(([k, l]) => `<button data-lab-mount="${k}" aria-pressed="${state.fMount === k}">${l}</button>`).join("")}</div>
+        <div class="prm"><div class="prm-head"><span>Size</span><output id="lab-size-out" class="mono">${fix(state.fSize, 1)} m</output></div><input type="range" id="lab-size" min="0.4" max="2" step="0.1" value="${state.fSize}" aria-label="Size"></div>
+        <div class="prm"><div class="prm-head"><span>Random seed</span></div><input type="number" id="lab-seed" min="1" max="99999" step="1" value="${ev.seed}" aria-label="Random seed"></div>
+        <label class="opt"><input type="checkbox" id="lab-fixed" ${ev.fixed ? "checked" : ""}> Same seed every run (repeatable)</label></section>
+      ${usesField(rule) ? `<section class="node"><h4>Field</h4><canvas id="lab-field" class="field-canvas" aria-label="The field that steers growth"></canvas>
+        <p class="hint">${f ? esc(f.label) : "Not computed yet: the preview uses an even field."} Change it in the <strong>Field</strong> panel.</p>
+        ${f ? "" : `<button class="btn small" id="lab-compute" ${state.gw.busy ? "disabled" : ""}>${state.gw.busy ? "Listening…" : "Compute the field"}</button>`}</section>` : ""}
+      ${nodes.map((nd) => `<section class="node"><h4>${esc(nd.name)}</h4>${nd.ps.map(prm).join("")}</section>`).join("")}
+      <section class="node"><h4>Material</h4>${materialPicker("lab-mat")}
+        ${lattice ? `<div class="prm"><div class="prm-head"><span>Printed in</span></div><select id="lab-print">${Object.entries(E.RIGIDS).map(([k, m]) => `<option value="${k}" ${k === state.lab.print ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></div>` : ""}
+        <p class="hint">${lattice ? "Struts and shells are printed; the felt balls absorb." : "Felt (or another soft material) does the absorbing."}</p></section>
+      <section class="node"><h4>Evolve</h4>
+        <div class="prm"><div class="prm-head"><span>Population</span><output class="mono" id="ev-pop-out">${ev.pop}</output></div><input type="range" id="ev-pop" min="6" max="30" step="1" value="${ev.pop}" aria-label="Population"></div>
+        <div class="prm"><div class="prm-head"><span>Generations</span><output class="mono" id="ev-gens-out">${ev.gens}</output></div><input type="range" id="ev-gens" min="1" max="20" step="1" value="${ev.gens}" aria-label="Generations"></div>
+        <div class="prm"><div class="prm-head"><span>Mutation</span><output class="mono" id="ev-mut-out">${pct(ev.mutation)}</output></div><input type="range" id="ev-mut" min="0.05" max="0.5" step="0.01" value="${ev.mutation}" aria-label="Mutation"></div>
+        <label class="opt"><input type="checkbox" id="ev-seeds" ${ev.useSeeds ? "checked" : ""}> Start from my seed library</label>
+        <div class="chips"><button class="btn small" id="lab-test">Test</button><button class="btn small primary" id="lab-evolve" ${state.fGrowing ? "disabled" : ""}>Evolve ${ev.pop} × ${ev.gens}</button></div></section>
+    </div></div>
+    <div class="card" id="lab-card"><div class="card-head"><h3>Live preview</h3><span class="hint" id="lab-stats"></span></div>
+      <div id="fv-slot"></div>
+      <div class="row3d"><span class="muted" id="lab-desc"></span><span class="chips"><button class="chip" id="lab-play">Watch it grow</button></span></div>
+      <label class="growbar"><span class="muted">Growth</span><input type="range" id="lab-grow" min="0" max="1" step="0.01" value="${state.lab.grow}" aria-label="How much of the growth to show"></label>
+      <div id="lab-test-out"></div></div>`;
+  if (f) drawField($("#lab-field"), f, null, state.fSize, state.fMount === "hanging" ? state.fSize : G.envelope(state.fSize, state.fMount).height, "standing");
+  labBuild(rule); showPreview(); labTestOut();
+  // bindings
+  $$("[data-prm]").forEach((el) => {
+    const i = Number(el.dataset.prm), p = schema.find((q) => q.i === i);
+    el.oninput = el.onchange = () => { genes[i] = Number(el.value); if (!p.options) $("#prm-out-" + i).textContent = fmtParam(p, genes[i]); labRebuild(); };
+  });
+  $$("[data-lock]").forEach((b) => b.onclick = () => { const i = Number(b.dataset.lock); locks[i] = !locks[i]; labView(rule); });
+  $$("[data-lo],[data-hi]").forEach((el) => el.oninput = () => {
+    const i = Number(el.dataset.lo ?? el.dataset.hi), p = schema.find((q) => q.i === i), r = ranges[i];
+    if (el.dataset.lo !== undefined) r[0] = Math.min(Number(el.value), r[1]); else r[1] = Math.max(Number(el.value), r[0]);
+    $("#rng-out-" + i).textContent = `${fmtParam(p, r[0])} to ${fmtParam(p, r[1])}`;
+  });
+  $$("[data-lab-mount]").forEach((b) => b.onclick = () => setMount(b.dataset.labMount));
+  $("#lab-size").oninput = (e) => { state.fSize = Number(e.target.value); $("#lab-size-out").textContent = fix(state.fSize, 1) + " m"; labRebuild(150); };
+  $("#lab-size").onchange = () => { state.gw.field = null; renderOptbar(); if (usesField(rule) && !isGeo(state.gw.source)) renderFormsCanvas(); };
+  $("#lab-seed").onchange = (e) => { state.evo.seed = Math.max(1, Math.round(Number(e.target.value) || 1)); };
+  $("#lab-fixed").onchange = (e) => { state.evo.fixed = e.target.checked; };
+  $("#lab-rand").onclick = () => { const rnd = G.rng(Date.now() % 100000); genes.forEach((g, i) => { if (!locks[i]) genes[i] = ranges[i][0] + rnd() * (ranges[i][1] - ranges[i][0]); }); labView(rule); };
+  $("#lab-reset").onclick = () => { genes.fill(0.5); locks.fill(false); ranges.forEach((r) => { r[0] = 0; r[1] = 1; }); labView(rule); };
+  $("#lab-ranges").onclick = () => { state.lab.showRanges = !state.lab.showRanges; labView(rule); };
+  if ($("#lab-compute")) $("#lab-compute").onclick = () => computeField().then(() => renderFormsCanvas());
+  $("#lab-mat").onchange = (e) => { state.matPick = e.target.value; briefChanged(); renderOptbar(); labRebuild(0); };
+  if ($("#lab-print")) $("#lab-print").onchange = (e) => { state.lab.print = e.target.value; labRebuild(0); };
+  for (const [id, k, fmt] of [["ev-pop", "pop", String], ["ev-gens", "gens", String], ["ev-mut", "mutation", pct]]) $("#" + id).oninput = (e) => { state.evo[k] = Number(e.target.value); $("#" + id + "-out").textContent = fmt(state.evo[k]); $("#lab-evolve").textContent = `Evolve ${state.evo.pop} × ${state.evo.gens}`; };
+  $("#ev-seeds").onchange = (e) => { state.evo.useSeeds = e.target.checked; };
+  $("#lab-test").onclick = () => labTest(rule);
+  $("#lab-evolve").onclick = growForms;
+  $("#lab-play").onclick = playGrowth;
+  $("#lab-grow").oninput = (e) => { cancelAnimationFrame(playRaf); state.lab.grow = Number(e.target.value); showPreview(); };
+}
+// A front view of a form at full size in millimetres, to trace, print or draw over.
+function drawingSVG(f) {
+  const parts = f.parts || primsOf(f.prims), b = G.bounds(parts), w = (b.max[0] - b.min[0]) * 1000, h = (b.max[2] - b.min[2]) * 1000, X = (x) => ((x - b.min[0]) * 1000).toFixed(1), Z = (z) => ((b.max[2] - z) * 1000).toFixed(1);
+  const step = Math.max(1, Math.ceil(parts.length / 20000));
+  let out = "";
+  parts.forEach((p, k) => {
+    if (k % step) return;
+    const col = p.structure ? "#888" : "#000";
+    if (G.isTri(p)) out += `<polygon points="${p.tri.map((q) => X(q[0]) + "," + Z(q[2])).join(" ")}" fill="none" stroke="${col}" stroke-width="0.3"/>`;
+    else if (G.isSheet(p)) out += `<polygon points="${[[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([a, c]) => X(p.c[0] + a * p.u[0] + c * p.v[0]) + "," + Z(p.c[2] + a * p.u[2] + c * p.v[2])).join(" ")}" fill="none" stroke="${col}" stroke-width="0.5"/>`;
+    else if (Math.hypot(...sub3(p.b, p.a)) < 1e-6) out += `<circle cx="${X(p.a[0])}" cy="${Z(p.a[2])}" r="${(p.r * 1000).toFixed(1)}" fill="none" stroke="${col}" stroke-width="0.5"/>`;
+    else out += `<line x1="${X(p.a[0])}" y1="${Z(p.a[2])}" x2="${X(p.b[0])}" y2="${Z(p.b[2])}" stroke="${col}" stroke-width="${Math.max(0.3, p.r * 2000).toFixed(1)}" stroke-linecap="round"/>`;
+  });
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!-- Biothing Sound Lab: ${esc(f.name || info(f.rule).name)}, front view at 1:1, millimetres. Black: felt. Grey: structure. -->\n<svg xmlns="http://www.w3.org/2000/svg" width="${w.toFixed(0)}mm" height="${h.toFixed(0)}mm" viewBox="0 0 ${w.toFixed(1)} ${h.toFixed(1)}">\n${out}\n</svg>\n`;
+}
+// The slotted strips laid out flat for cutting: stepped tops follow the field, slots at every crossing
+// (vertical strips slotted from the back, horizontal ones from the front, each half the shared depth).
+function stripSVG(f) {
+  const P = f.stripPlan, t = P.t * 1000, gap = 15;
+  let y = 10, body = "", maxL = 0;
+  for (const st of P.strips) {
+    const along = st.along.map((a) => (a - st.along[0]) * 1000), Hs = st.heights.map((h) => h * 1000), hMax = Math.max(...Hs), L = along[along.length - 1];
+    maxL = Math.max(maxL, L);
+    let d = `M0 ${(y + hMax).toFixed(1)} `;
+    for (let k = 0; k < Hs.length; k++) d += `L${along[k].toFixed(1)} ${(y + hMax - Hs[k]).toFixed(1)} L${along[k + 1].toFixed(1)} ${(y + hMax - Hs[k]).toFixed(1)} `;
+    d += `L${L.toFixed(1)} ${(y + hMax).toFixed(1)} Z`;
+    let slots = "";
+    for (let k = 1; k < along.length - 1; k++) {
+      const hh = Math.min(Hs[k - 1], Hs[k]) / 2, x = along[k] - t / 2;
+      slots += st.slotsFrom === "back" ? `<rect x="${x.toFixed(1)}" y="${(y + hMax - hh).toFixed(1)}" width="${t.toFixed(1)}" height="${hh.toFixed(1)}" fill="none" stroke="#ff0000" stroke-width="0.2"/>`
+        : `<rect x="${x.toFixed(1)}" y="${(y + hMax - Math.min(Hs[k - 1], Hs[k])).toFixed(1)}" width="${t.toFixed(1)}" height="${hh.toFixed(1)}" fill="none" stroke="#ff0000" stroke-width="0.2"/>`;
+    }
+    body += `<path d="${d}" fill="none" stroke="#ff0000" stroke-width="0.2"/>${slots}<text x="${(L + 8).toFixed(1)}" y="${(y + hMax / 2 + 3).toFixed(1)}" font-size="8" fill="#0000ff">${st.name}</text>`;
+    y += hMax + gap;
+  }
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!-- Biothing Sound Lab: ${esc(f.name)}. ${P.strips.length} felt strips, ${Math.round(t)} mm. Red: cut (slots are ${Math.round(t)} mm wide). Blue: labels (V = vertical strips, slotted from the back; H = horizontal, slotted from the front). -->\n<svg xmlns="http://www.w3.org/2000/svg" width="${(maxL + 40).toFixed(0)}mm" height="${y.toFixed(0)}mm" viewBox="0 0 ${(maxL + 40).toFixed(1)} ${y.toFixed(1)}">\n${body}\n</svg>\n`;
 }
 
 // ------------------------------------------------------- surface pieces ----
@@ -3757,14 +4768,15 @@ function info(key) {
   return { name: fam.name, imitates: fam.imitates, idea: fam.idea, group: "surface" };
 }
 const describeOf = (f) => (f.kind === "surface" ? explain(f.engine).slice(0, -1).join(" ") : G.RULES[f.rule].describe(f.genes));
-const surfFaces = (key) => (key === "cloud" ? 1 : 2); // the cloud's alpha already counts both of its faces
+const surfFaces = (key, mount) => (key === "cloud" || mount === "wall" ? 1 : 2); // the cloud's alpha already counts both of its faces; a wall module has one
 function surfGeom(size, mount, key) {
   const env = G.envelope(size, mount);
-  return key === "cloud" ? { W: size, H: size, face: size * size } : { W: size, H: env.height - 0.1, face: size * (env.height - 0.1) };
+  if (key === "cloud" || mount === "wall") return { W: size, H: size, face: size * size };
+  return { W: size, H: env.height - 0.1, face: size * (env.height - 0.1) };
 }
 function surfBrief(key, size = state.fSize, mount = state.fMount) {
   const g = surfGeom(size, mount, key);
-  return { target: state.target, maxDepth: SURF_DEPTH, massBudget: state.fBudget / (g.face * surfFaces(key)), porous: allowedSoft(), rigid: [...state.rigid] };
+  return { target: state.target, maxDepth: SURF_DEPTH, massBudget: state.fBudget / (g.face * surfFaces(key, mount)), porous: allowedSoft(), rigid: [...state.rigid] };
 }
 
 // Felt and structure parts for one face (sign = +1 or -1 along y), in metres; the core is at y = 0.
@@ -3838,6 +4850,12 @@ function surfParts(r, size, mount) {
     parts.label = "4 hanging cables";
     return parts;
   }
+  if (mount === "wall") {
+    // one textured face on a backing board fixed to the wall (y = 0)
+    parts.push({ c: [0, 0.0045, H / 2], u: [W / 2, 0, 0], v: [0, 0, H / 2], t: 0.009, structure: true }, ...surfFace(r, 1, W, H, 0));
+    parts.label = "a backing board on a wall cleat";
+    return parts;
+  }
   const hanging = mount === "hanging", z0 = hanging ? -H - 0.1 : 0.1;
   parts.push({ c: [0, 0, z0 + H / 2], u: [W / 2, 0, 0], v: [0, 0, H / 2], t: 0.009, structure: true });
   for (const sign of [1, -1]) parts.push(...surfFace(r, sign, W, H, z0));
@@ -3857,7 +4875,7 @@ function surfParts(r, size, mount) {
 
 // One engine result (per m² of face) as a piece: absorption per piece, mass, geometry, stability.
 function surfPiece(r, sKey, size = state.fSize, mount = state.fMount) {
-  const { face } = surfGeom(size, mount, r.family), faces = surfFaces(r.family), area = face * faces;
+  const { face } = surfGeom(size, mount, r.family), faces = surfFaces(r.family, mount), area = face * faces;
   const oct = R.thirdToOctave(r.alpha), parts = surfParts(r, size, mount), felt = E.FELTS[r.params.porous];
   const perPiece = [1, 2, 3].map((i) => oct[i] * area), w = formBandWeights(), score = perPiece.reduce((a, x, i) => a + x * w[i], 0), mass = r.mass * area;
   const vox = G.voxelize(parts, 0.05), feltMass = felt ? vox.volume * felt.density : 0;
@@ -3877,15 +4895,15 @@ function surfBaseline(f) {
   return [1, 2, 3].map((i) => oct[i] * panel);
 }
 
-async function growSurface(rule, sKey, onLive) {
-  const fam = E.FAMILY[rule], b = surfBrief(rule);
+async function growSurface(rule, sKey, mount, onLive) {
+  const fam = E.FAMILY[rule], b = surfBrief(rule, state.fSize, mount);
   const br = E.breeder(fam, b, { population: 24, generations: 16, seed: state.fSeed * 31 + rule.length });
   while (!br.done) {
     br.step();
-    if (br.best) onLive(surfPiece(br.best, sKey), br.generation / br.generations);
+    if (br.best) onLive(surfPiece(br.best, sKey, state.fSize, mount), br.generation / br.generations);
     await new Promise((res) => requestAnimationFrame(() => setTimeout(res, 0)));
   }
-  return surfPiece(br.best, sKey);
+  return surfPiece(br.best, sKey, state.fSize, mount);
 }
 
 // ------------------------------------------------------------- status bar --
@@ -3894,7 +4912,7 @@ function renderStatus() {
   if (gmode() === "forms") {
     const sp = curSpace(), rr = sp && spaceCalc(sp).res;
     s.innerHTML = `${sp ? `<span>${esc(sp.name)}</span><span class="mono">echo ${fix(rr.speechRtAfter, 2)} s (aim ${fix(rr.target, 2)} s)</span>` : ""}${state.fGrowing ? `<span>Growing and testing</span><span class="progress"><i style="width:${state.fProgress * 100}%"></i></span>` : `<span>${state.forms.length} forms grown</span>`}
-      <span>${state.fMount === "standing" ? "freestanding" : "hanging"}</span><span class="mono">${fix(state.fSize, 1)} m · ${state.fBudget} kg</span><span>${state.matPick === "auto" ? `best of ${state.porous.size} materials` : esc(E.FELTS[state.matPick].name)}</span><span>Wave simulator: 2D slices at 250, 500 and 1000 Hz</span>`;
+      <span>${state.allMounts ? "wall, ceiling and floor" : MOUNT_NAME[state.fMount].toLowerCase()}</span><span class="mono">${fix(state.fSize, 1)} m · ${state.fBudget} kg</span><span>${state.matPick === "auto" ? `best of ${state.porous.size} materials` : esc(E.FELTS[state.matPick].name)}</span><span>Wave simulator: 2D slices at 250, 500 and 1000 Hz</span>`;
     return;
   }
   if (state.ws === "spaces") {
@@ -3911,7 +4929,7 @@ function renderStatus() {
 const TIPS = {
   shapes: { text: "Surface textures: set what to quiet, the <strong>depth</strong> and the <strong>budget</strong> in the bar above, then press <strong>Grow</strong>. Free forms are further down the toolbar.",
     chips: ["Why did this shape win?", "How deep should it be?", "How would I make it?"] },
-  forms: { text: "Pick the <strong>room</strong> in the options bar, a <strong>generator</strong> in the toolbar (surface textures, natural growth, sheet hybrids, the sound-grown membrane or the interference cut-sheet) and a <strong>material</strong>, then press <strong>Grow</strong> and <strong>Place in this room</strong>. On a grown form you can grow <strong>6 variants</strong> or a <strong>speech skin</strong>.",
+  forms: { text: "Pick the <strong>room</strong>, where it goes (<strong>floor, wall, ceiling</strong> or all 3) and a <strong>generator</strong> in the toolbar. Each one opens as a <strong>graph</strong>: drag values and watch it regrow, lock what you like, then <strong>Test</strong> or <strong>Evolve</strong>, and <strong>Place in this room</strong>.",
     chips: ["Which form works best?", "What is Biothing, simply?", "How would I make this form?"] },
   materials: { text: "Tick the materials you like. The chart shows each one as a plain flat layer, so you see the material before any shaping.",
     chips: ["Which material is best for me?", "Explain the chart", "Which are the most natural?"] },
@@ -3925,7 +4943,7 @@ function renderGuideTip() {
 }
 document.addEventListener("click", (e) => { const c = e.target.closest("[data-ask]"); if (c) ask(c.dataset.ask); });
 
-const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing): all of them in one Structures workspace: surface textures (panel-like families) and free objects. The product must be freestanding: standing forms grow a holdfast (splayed roots or a plinth) and must lean 10 degrees before toppling. Forms come from natural rules (branching tree, snow crystal, folding coral, spiral shell, foam) or sheet hybrids (felt sheets arranged as a leaf canopy, mushroom gills, pine cone or twisted lamellae), or the Sound-grown membrane after Biothing's Genware (a sound source, either the target sound, an uploaded recording or a room's resonances, becomes a field of air motion; a cellular felt membrane grows denser where air moves most and the field is updated by what has grown over three rounds). A seed library keeps genomes the designer likes and starts new growth from them (after Malafouris's essay on Genware as a "library of seeds" changed by what grows); it can be saved and loaded at the next venue. Further ideas from Andrasek's AA lecture "Material Potency": the Interference cut-sheet (after her New Museum ceiling, where wave interference was cut into flat laser-cut sheets that gravity bent into 3D): one flat felt sheet with three-sided flap cuts, larger and more open where the room's sound field is strong; each flap sags under its own weight depending on the felt's density and thickness (top hinges sag, side hinges hold), and it exports an SVG cut file. "Grow a speech skin": a second, finer growth of felt tufts on a grown form, drawn by the speech-band sound (one behaviour grown on another, like her tower and its skin). "Grow 6 variants": a family whose genes move within brackets of elasticity around the parent, all different but one nature, like dunes in one desert. "Where pieces help most": a probability map of the room plan (low pitches: room standing waves at ear height, since felt works where air moves; speech: a band 0.4-1.6 m from the walls) from which layouts A, B, C are drawn by chance, after her tower project's probabilistic programme. Positions do not change the Sabine echo numbers. When asked about Biothing, explain simply: grow, don't draw; simple local rules give rich results; differentiation within one nature; material computation; the environment steers growth; a garden of seeds; the designer guides like a gardener. Everything is tested in a 2D wave simulator that reads about 25% conservative. Everything happens in one Studio mode around the selected room (a ready-made room or the user's OBJ model): it is shown in 3D, structures are grown and placed in it, and its echo and crowd noise update. The target "This room's needs" weights each pitch by how much the room rings too long there. A Materials tab compares materials. The person is a designer, not an acoustic engineer.
+const RULES = `You are the friendly guide inside "Biothing Sound Lab", a design tool laid out like a creative-suite app. It grows sound-absorbing shapes inspired by nature (after Alisa Andrasek's Biothing): all of them in one Structures workspace: surface textures (panel-like families) and free objects. The product must be freestanding: standing forms grow a holdfast (splayed roots or a plinth) and must lean 10 degrees before toppling. Forms come from natural rules (branching tree, snow crystal, folding coral, spiral shell, foam) or sheet hybrids (felt sheets arranged as a leaf canopy, mushroom gills, pine cone or twisted lamellae), or the Sound-grown membrane after Biothing's Genware (a sound source, either the target sound, an uploaded recording or a room's resonances, becomes a field of air motion; a cellular felt membrane grows denser where air moves most and the field is updated by what has grown over three rounds). A seed library keeps genomes the designer likes and starts new growth from them (after Malafouris's essay on Genware as a "library of seeds" changed by what grows); it can be saved and loaded at the next venue. Further ideas from Andrasek's AA lecture "Material Potency": the Interference cut-sheet (after her New Museum ceiling, where wave interference was cut into flat laser-cut sheets that gravity bent into 3D): one flat felt sheet with three-sided flap cuts, larger and more open where the room's sound field is strong; each flap sags under its own weight depending on the felt's density and thickness (top hinges sag, side hinges hold), and it exports an SVG cut file. "Grow a speech skin": a second, finer growth of felt tufts on a grown form, drawn by the speech-band sound (one behaviour grown on another, like her tower and its skin). "Grow 6 variants": a family whose genes move within brackets of elasticity around the parent, all different but one nature, like dunes in one desert. "Where pieces help most": a probability map of the room plan (low pitches: room standing waves at ear height, since felt works where air moves; speech: a band 0.4-1.6 m from the walls) from which layouts A, B, C are drawn by chance, after her tower project's probabilistic programme. Positions do not change the Sabine echo numbers. Every generator can grow for a wall (pressed into a relief, tested against the wall), the ceiling or the floor, or all three in one run; seeds are kept per place. Every single generator opens as a graph like Grasshopper or nTop: nodes Seed and place (mount, size, random seed), Field (from sound: target sound, recording, room resonances; or drawn: attractor point, gradient, rings, two interfering waves, noise), the rule's own values grouped as Cell / Response to the field / Holdfast, Material, and Evolve (population, generations, mutation, start from seeds). Each value can be dragged (live 3D preview), locked, or given a range for evolution; Test runs the wave simulator on the exact form; Keep adds it; Watch it grow replays the order it grew in. Pattern and lattice generators: Voronoi cells (open cells, funnels, stepped web), Felt petals on sunflower spirals, Slotted felt strips (egg-crate with a strip cut file), Strut lattice (cubic, body-centred, octet, diamond, honeycomb; printed, graded, wavy, felt balls in cells), Minimal surface TPMS (gyroid, Schwarz P, diamond; printed shell with felt in one labyrinth), Spatial lattice (a printed lattice filling a column-into-canopy or a cloud, like Biothing's robotically printed pergola), Cellular automata (3D neighbour rules over generations: coral, sponge, crystal), Liquid bioform (blended blobs, or pulls stretched out of a slab after Ross Lovegrove's Liquid Table Bioform, as a heat-formed felt shell with holes). Printed struts and shells barely absorb because their gaps are far too big to rub the air; felt does the absorbing. When asked about Biothing, explain simply: grow, don't draw; simple local rules give rich results; differentiation within one nature; material computation; the environment steers growth; a garden of seeds; the designer guides like a gardener. Everything is tested in a 2D wave simulator that reads about 25% conservative. Everything happens in one Studio mode around the selected room (a ready-made room or the user's OBJ model): it is shown in 3D, structures are grown and placed in it, and its echo and crowd noise update. The target "This room's needs" weights each pitch by how much the room rings too long there. A Materials tab compares materials. The person is a designer, not an acoustic engineer.
 How to answer:
 - Simple, everyday words; explain any technical word in a few words the first time.
 - Short: at most about 120 words unless asked for more. Short paragraphs or a few bullets.
@@ -3939,7 +4957,7 @@ function pageState() {
   ];
   if (gmode() === "shapes" && state.tool !== "all") lines.push(`Inspecting: ${E.FAMILY[state.tool].name}`);
   lines.push(`Sound source for membranes: ${gwLabel()}${state.gw.field ? " (field computed)" : ""}${state.gw.file ? `; file ${state.gw.file.name}, ${Math.round(state.gw.file.bpm)} BPM` : ""}; seed library: ${Object.entries(state.seeds).map(([k, l]) => `${l.length} ${k}`).join(", ") || "empty"}`);
-  lines.push(`Forms settings: ${state.fMount === "standing" ? "freestanding" : "hanging"}, size ${state.fSize} m, material per piece ${state.fBudget} kg, rule ${state.fRule}; material choice: ${state.matPick === "auto" ? "best of the ticked materials" : E.FELTS[state.matPick].name}`);
+  lines.push(`Forms settings: ${state.allMounts ? "growing for the wall, the ceiling and the floor at once" : MOUNT_NAME[state.fMount].toLowerCase()}, evolution ${state.evo.pop} x ${state.evo.gens} generations, mutation ${pct(state.evo.mutation)}, seed ${state.evo.seed}, size ${state.fSize} m, material per piece ${state.fBudget} kg, rule ${state.fRule}; material choice: ${state.matPick === "auto" ? "best of the ticked materials" : E.FELTS[state.matPick].name}`);
   for (const f of state.forms) lines.push(`- ${f.kind === "surface" ? "Surface texture as a freestanding screen" : "Free form"} "${f.name}"${f.id === state.formSel ? " (selected)" : ""}: ${f.mount}, ${describeOf(f)} ${E.FELTS[f.material].name}, ${fix(f.mass, 1)} kg; absorption ${f.area.map((a) => fix(a, 2)).join("/")} m2 at 250/500/1000 Hz; ${fix(f.perKg, 2)} m2 per kg${f.stance ? `; freestanding on ${stanceText(f)}, tips at ${fix(f.stance.angle, 0)} degrees (${f.stance.ok ? "stable" : "unstable"})` : ""}${f.baseline ? `; flat panel with the same kg: ${f.baseline.map((a) => fix(a, 2)).join("/")} m2` : ""}`);
   for (const f of state.forms) {
     if (f.cutPlan) lines.push(`  "${f.name}" cut-sheet: ${f.cutPlan.flaps} flaps, ${fix(f.cutPlan.cutLength, 1)} m of cuts, ${Math.round(f.cutPlan.t * 1000)} mm felt, ${f.cutPlan.side ? "side" : "top"} hinges, flaps close ${pct(f.cutPlan.droop)} under their weight`);
@@ -3998,12 +5016,13 @@ const TOUR = [
   { ws: "grow", tool: "all", sel: "#room-zone", title: "2. See the room", text: "The room in 3D, its echo now and with what you placed, and the recommended echo for talking. Drag to orbit." },
   { ws: "grow", tool: "all", sel: "#opt-target", title: "3. Grow for this room", text: "“This room's needs” weights each pitch by how much the room rings too long, so the structures answer the environment. Pick the material next to it." },
   { ws: "grow", tool: "all", sel: "#tools", title: "4. Generators", text: "Surface textures (as freestanding screens), natural growth, felt-sheet hybrids and the sound-grown membrane. The room view tools are at the bottom." },
-  { ws: "grow", tool: "all", sel: "#opt-mount", title: "5. Freestanding", text: "Structures grow a holdfast and must lean at least 10° before toppling. Set the size and the budget per piece, then press Grow." },
-  { ws: "grow", tool: "all", sel: "#panel-absorbers", title: "6. Place in the room", text: "Open a grown structure and press “Place in this room”: the lab adds as many pieces as the room needs and the 3D view and echo update." },
-  { ws: "grow", tool: "membrane", sel: "#panel-sound", title: "7. Sound draws the form", text: "After Biothing's Genware: the room's own resonances (or a recording) can grow a membrane, or cut the flaps of an interference cut-sheet." },
-  { ws: "grow", tool: "all", sel: "#room-map-card", title: "8. Where pieces go", text: "A map of the room shows where pieces help most. Layouts A, B and C are drawn from it by chance: proposals to choose from." },
-  { ws: "materials", sel: "#panel-materials", title: "9. Materials library", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
-  { ws: "grow", tool: "all", sel: "#panel-guide", title: "10. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
+  { ws: "grow", tool: "all", sel: "#opt-mount", title: "5. Floor, wall or ceiling", text: "Grow for one place, or All 3 to get a seed for the wall, the ceiling and the floor in one run. Floor pieces must lean 10° before toppling." },
+  { ws: "grow", tool: "voronoi", sel: ".graph", title: "6. The graph", text: "Like Grasshopper: every value of a generator is a slider. Drag one and the piece regrows; lock what you like, then Test or Evolve within your ranges." },
+  { ws: "grow", tool: "all", sel: "#panel-absorbers", title: "7. Place in the room", text: "Open a grown structure and press “Place in this room”: the lab adds as many pieces as the room needs and the 3D view and echo update." },
+  { ws: "grow", tool: "membrane", sel: "#panel-sound", title: "8. Sound draws the form", text: "After Biothing's Genware: the room's own resonances (or a recording) can grow a membrane, or cut the flaps of an interference cut-sheet." },
+  { ws: "grow", tool: "all", sel: "#room-map-card", title: "9. Where pieces go", text: "A map of the room shows where pieces help most. Layouts A, B and C are drawn from it by chance: proposals to choose from." },
+  { ws: "materials", sel: "#panel-materials", title: "10. Materials library", text: "Tick what you are happy to use. The chart compares each material as a plain flat layer." },
+  { ws: "grow", tool: "all", sel: "#panel-guide", title: "11. Ask me", text: "I'm here the whole time. Ask anything, in your own words." },
 ];
 let tourAt = -1;
 function tour(i) {
